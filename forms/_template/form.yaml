@@ -1,0 +1,25 @@
+name: _template
+description: Fictional paper intake and tally sheet
+template_image: template.png
+
+fields:
+  - id: site_name
+    label: Site
+    type: text
+  - id: visit_date
+    label: Date
+    type: date
+  - id: shift
+    label: Shift
+    type: choice
+    options: [morning, afternoon, evening]
+  - id: arrivals_count
+    label: Arrivals
+    type: integer
+    min: 0
+    max: 500
+  - id: departures_count
+    label: Departures
+    type: integer
+    min: 0
+    max: 500

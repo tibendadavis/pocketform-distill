@@ -1,0 +1,28 @@
+run_name: template-run
+
+form: forms/_template
+
+teacher:
+  backend: ollama
+  model: qwen3.5:9b
+  top_logprobs: 20
+  think: false
+
+image:
+  max_pixels: 819200
+
+student:
+  model: Qwen/Qwen3.5-0.8B
+  method: lora
+
+synth:
+  num_forms: 500
+
+train:
+  soft_label_weight: 0.5
+
+targets:
+  field_accuracy: 0.80
+
+export:
+  format: json
