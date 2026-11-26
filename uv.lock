@@ -2367,6 +2367,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
     { name = "mlflow" },
+    { name = "numpy" },
     { name = "ollama" },
     { name = "peft" },
     { name = "pillow" },
@@ -2381,9 +2382,13 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "pydantic" },
     { name = "pytest" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -2391,6 +2396,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=1.16.0" },
     { name = "datasets", specifier = ">=5.2.0" },
     { name = "mlflow", specifier = ">=3.18.0" },
+    { name = "numpy", specifier = ">=2.5.5" },
     { name = "ollama", specifier = ">=0.6.3" },
     { name = "peft", specifier = ">=0.22.0" },
     { name = "pillow", specifier = ">=13.0.0" },
@@ -2405,9 +2411,13 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "numpy", specifier = ">=2.5.5" },
+    { name = "pillow", specifier = ">=13.0.0" },
+    { name = "pydantic", specifier = ">=2.14.4" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pyyaml", specifier = ">=6.0.4" },
     { name = "ruff", specifier = ">=0.17.6" },
+    { name = "typer", specifier = ">=0.29.2" },
 ]
 
 [[package]]
