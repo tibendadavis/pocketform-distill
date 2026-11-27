@@ -108,9 +108,12 @@ of an unfilled copy (iPhone Notes > Scan Documents, Google Drive > Scan, Microso
 straightens it. Don't use a filled-in phone photo: its handwriting would sit under the synthetic handwriting, it is
 already distorted before synth adds its own defects, and real filled forms are kept for testing only.
 
-**Boxes for a template:** `uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form>`
-opens the image. Click two opposite corners of each field's box in `form.yaml` order (u = undo, s = skip,
-q = done), then paste the printed `box: [x, y, w, h]` lines into the spec.
+**Boxes for a template:** a box is where the handwriting for one field goes, in template pixels. Run
+`uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form> --write`. A window walks the
+fields in `form.yaml` order. The bottom bar names the field and its label, and an orange dashed rectangle shows
+where `form.yaml` currently puts it. For each field, click the top-left then the bottom-right corner of its writing
+area. For a comb field, take all digit cells as one box. Enter keeps the orange box, u undoes, s skips, q finishes.
+`--write` saves the boxes into `form.yaml` (previous version in `form.yaml.bak`); without it they are only printed.
 
 ## Requirements
 
