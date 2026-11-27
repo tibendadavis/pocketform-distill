@@ -82,6 +82,38 @@ def test_each_section_gets_its_own_photos_truth_and_seeds(tmp_path, two_section_
     assert set(json.loads((out / "run.json").read_text())["template_sha256"]) == {"a", "b"}
 
 
+def test_photo_seed_depends_only_on_base_section_and_number():
+    assert photo_seed(1234, "b", 7) == photo_seed(1234, "b", 7)
+    seeds = {photo_seed(base, sec, n) for base in (1, 2) for sec in ("a", "b") for n in range(100)}
+    assert len(seeds) == 400  # every (base, section, n) gets its own seed
+
+
+def test_adding_a_section_keeps_existing_photos(tmp_path, two_section_form):
+    # Section "a" alone, then a new section "b" added: a's photos must not change, so their teacher outputs
+    # would stay valid. Same for putting the new section first.
+    data = yaml.safe_load((two_section_form / "form.yaml").read_text())
+    only_a = tmp_path / "only_a"
+    shutil.copytree(two_section_form, only_a)
+    (only_a / "form.yaml").write_text(yaml.safe_dump(data | {"sections": data["sections"][:1]}))
+    b_first = tmp_path / "b_first"
+    shutil.copytree(two_section_form, b_first)
+    (b_first / "form.yaml").write_text(yaml.safe_dump(data | {"sections": data["sections"][::-1]}))
+
+    before = run_synth(config(form=only_a, num_photos=3), tmp_path / "before")
+    for form in (two_section_form, b_first):
+        after = run_synth(config(form=form, num_photos=3), tmp_path / form.name)
+        for i in range(3):
+            assert (before / f"a-{i:05d}.png").read_bytes() == (after / f"a-{i:05d}.png").read_bytes()
+            assert (before / f"a-{i:05d}.json").read_bytes() == (after / f"a-{i:05d}.json").read_bytes()
+
+
+def test_raising_num_photos_keeps_existing_photos(tmp_path):
+    small = run_synth(config(num_photos=2), tmp_path / "small")
+    big = run_synth(config(num_photos=5), tmp_path / "big")
+    for i in range(2):
+        assert (small / f"a-{i:05d}.png").read_bytes() == (big / f"a-{i:05d}.png").read_bytes()
+
+
 def test_manifest_records_writer_and_defects(tmp_path):
     out = run_synth(config(num_photos=6), tmp_path)
     step_names = [name for name, _ in STEPS]
