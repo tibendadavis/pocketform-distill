@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from pocketform_distill.augment import STEPS
 from pocketform_distill.config import AugmentConfig, RunConfig, load_run_config
 from pocketform_distill.synth import generate_form, list_fonts, make_truth, run_synth, val_indices
 
@@ -38,7 +39,30 @@ def test_writes_expected_files(tmp_path):
         assert list(json.loads((out / f"{m['id']}.json").read_text())) == field_ids
         with Image.open(out / f"{m['id']}.png") as img:
             assert img.mode == "RGB"
-    assert json.loads((out / "run.json").read_text())["stage"] == "synth"
+    run = json.loads((out / "run.json").read_text())
+    assert run["stage"] == "synth" and len(run["template_sha256"]) == 64
+
+
+def test_manifest_records_writer_and_defects(tmp_path):
+    out = run_synth(config(num_forms=6), tmp_path)
+    lines = [json.loads(line) for line in (out / "manifest.jsonl").read_text().splitlines()]
+    step_names = [name for name, _ in STEPS]
+    for m in lines:
+        assert m["writer"]["font"].endswith(".ttf")
+        assert list(m["defects"]) == [n for n in step_names if n in m["defects"]]  # applied in STEPS order
+        if "rotate" in m["defects"]:
+            assert abs(m["defects"]["rotate"]["deg"]) <= 3
+        assert 50 <= m["defects"]["jpeg"]["quality"] <= 90  # jpeg p = 1.0 in the template config
+
+
+def test_form_can_be_regenerated_from_its_manifest_seed(tmp_path):
+    cfg = config()
+    out = run_synth(cfg, tmp_path)
+    m = json.loads((out / "manifest.jsonl").read_text().splitlines()[2])
+    spec = cfg.load_form()
+    img, truth, _ = generate_form(spec, spec.open_template(), cfg.synth, list_fonts(cfg.synth.fonts_dir), m["seed"])
+    assert np.array_equal(np.asarray(img), np.asarray(Image.open(out / f"{m['id']}.png")))
+    assert truth == json.loads((out / f"{m['id']}.json").read_text())
 
 
 def test_same_config_gives_byte_identical_output(tmp_path):
