@@ -61,20 +61,60 @@ def _example(spec: FormSpec) -> str:
     return json.dumps({f.id: _example_value(f, i) for i, f in enumerate(first)}, ensure_ascii=False)
 
 
+def rows(fields: list[FormField]) -> list[list[FormField]]:
+    """Group consecutive fields that sit side by side (boxes overlap vertically, left to right) into rows.
+
+    Only the grouping reaches the prompt, not coordinates, so re-picking boxes doesn't change the prompt unless a
+    field moves to another row.
+    """
+    out: list[list[FormField]] = []
+    for f in fields:
+        if out:
+            prev = out[-1][-1]
+            overlap = min(prev.box[1] + prev.box[3], f.box[1] + f.box[3]) - max(prev.box[1], f.box[1])
+            if overlap > min(prev.box[3], f.box[3]) / 2 and f.box[0] > prev.box[0]:
+                out[-1].append(f)
+                continue
+        out.append([f])
+    return out
+
+
+def _row_line(row: list[FormField], hint: bool) -> str:
+    """One prompt line per row. Labels written "<row>, <column>" become `row <row>: id (column) | ...`."""
+    def h(f: FormField) -> str:
+        return f" [{_describe(f)}]" if hint else ""
+
+    if len(row) == 1:
+        return f"- {row[0].id}: {row[0].label}{h(row[0])}"
+    split = [f.label.rsplit(", ", 1) for f in row]
+    if all(len(s) == 2 for s in split) and len({s[0] for s in split}) == 1:
+        return f"- row {split[0][0]}: " + " | ".join(f"{f.id} ({s[1]}){h(f)}" for f, s in zip(row, split))
+    return "- row: " + " | ".join(f"{f.id} ({f.label}){h(f)}" for f in row)
+
+
 def sectioned_prompt(spec: FormSpec) -> str:
     """Prompt for a form made of titled sections of fields.
 
     Kept short on purpose: the phone pays for every prompt token on every photo. A type hint shared by a whole
-    section is stated once on its heading, and only the answer rules for types the form has are included.
+    section is stated once on its heading, fields side by side are listed as one row (left to right, which also
+    tells the model where each value is), and only the answer rules for types the form has are included.
     """
     head = f'This is a phone photo of a paper form: "{spec.name}"'
     lines = [head + (f" ({spec.description})." if spec.description else "."),
-             "Read the handwritten value of every field listed below.", "", "Fields, by section:"]
+             "Read the handwritten value of every field listed below.", "",
+             "Fields, by section and row (left to right):"]
+    side_by_side_combs = False
     for section in spec.sections:
         hints = {_describe(f) for f in section.fields}
         shared = hints.pop() if len(hints) == 1 else None
         lines.append(f"## {section.title or section.id}" + (f" [all: {shared}]" if shared else ""))
-        lines += [f"- {f.id}: {f.label}" + ("" if shared else f" [{_describe(f)}]") for f in section.fields]
+        for row in rows(section.fields):
+            lines.append(_row_line(row, hint=shared is None))
+            side_by_side_combs |= sum(bool(f.digits) for f in row) > 1
+    if side_by_side_combs:
+        # Measured on qwen3.5:9b: without this, "4" in one comb next to "851" in the next was read as 4851.
+        lines.append("Each field is its own group of boxes. Groups in a row sit side by side: read each group on "
+                     "its own and never join digits from neighbouring groups.")
 
     types = {f.type for f in spec.fields}
     rules = [
