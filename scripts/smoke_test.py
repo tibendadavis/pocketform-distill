@@ -12,6 +12,7 @@ import torch
 from transformers import AutoModelForMultimodalLM, AutoProcessor
 
 from pocketform_distill.config import load_form
+from pocketform_distill.preprocess import prepare_image
 from pocketform_distill.prompt import build_prompt
 
 
@@ -41,6 +42,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
     parser.add_argument("--section", help="section the photo shows (default: the form's only section)")
+    parser.add_argument("--max-pixels", type=int, default=819200, help="image.max_pixels from the run config")
     args = parser.parse_args()
     spec = load_form(args.form)
     prompt = build_prompt(spec, spec.section(args.section))
@@ -64,7 +66,7 @@ def main() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "image", "path": image_path},
+                {"type": "image", "image": prepare_image(image_path, args.max_pixels)},  # same pixels as every stage
                 {"type": "text", "text": prompt},
             ],
         }
