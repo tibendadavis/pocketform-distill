@@ -10,7 +10,8 @@ import yaml
 from PIL import Image
 
 from pocketform_distill.augment import STEPS
-from pocketform_distill.config import AugmentConfig, RunConfig, load_run_config
+from pocketform_distill.config import AugmentConfig, RunConfig, load_form, load_run_config
+from pocketform_distill.render import cells
 from pocketform_distill.synth import generate_photo, list_fonts, make_truth, photo_seed, run_synth, val_indices
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -200,3 +201,43 @@ def test_filled_fields_get_ink_inside_their_box():
     for f in section.fields:
         x, y, w, h = f.box
         assert diff[y:y + h, x:x + w].any(), f"no ink in {f.id}"
+
+
+def test_mark_ink_lands_only_in_the_chosen_option(tmp_path):
+    section = mark_and_code_section(tmp_path)
+    cfg = config(empty_rate=0.0, augment=NO_AUG).synth
+    blank = section.open_template()
+    for seed in range(8):  # covers the writers' mark styles
+        img, truth, drawn = generate_photo(section, blank, cfg, list_fonts(cfg.fonts_dir), seed=seed)
+        diff = np.abs(np.asarray(img, np.int16) - np.asarray(blank, np.int16)).sum(-1) > 0
+        region = section.fields[0]
+        for option, (x, y, w, h) in zip(region.options, region.option_boxes):
+            pad = w  # ticks and crosses may overshoot the circle a little, never into the next option
+            inked = diff[max(0, y - pad):y + h + pad, max(0, x - pad):x + w + pad].any()
+            assert inked == (option == truth["region"]), (seed, drawn["writer"]["mark"], option)
+
+
+def test_code_is_written_one_character_per_cell_from_the_left(tmp_path):
+    section = mark_and_code_section(tmp_path)
+    cfg = config(empty_rate=0.0, augment=NO_AUG).synth
+    blank = section.open_template()
+    img, truth, _ = generate_photo(section, blank, cfg, list_fonts(cfg.fonts_dir), seed=0)
+    diff = np.abs(np.asarray(img, np.int16) - np.asarray(blank, np.int16)).sum(-1) > 0
+    code = section.fields[1]
+    assert len(truth["code"]) == code.cells
+    for x, y, w, h in cells(code):
+        assert diff[y:y + h, x:x + w].any()
+
+
+def mark_and_code_section(tmp_path: Path):
+    folder = tmp_path / "mc"
+    folder.mkdir()
+    Image.new("RGB", (400, 200), "white").save(folder / "template-m.png")
+    spec = {"name": "mc", "sections": [{"id": "m", "title": "M", "template_image": "template-m.png", "groups": [
+        {"id": "g", "fields": [
+            {"id": "region", "label": "Region", "type": "mark", "options": ["n", "s", "e"],
+             "option_boxes": [[40, 20, 18, 18], [140, 20, 18, 18], [240, 20, 18, 18]]},
+            {"id": "code", "label": "Code", "type": "code", "cells": 5, "box": [40, 100, 150, 40]},
+        ]}]}]}
+    (folder / "form.yaml").write_text(yaml.safe_dump(spec))
+    return load_form(folder).section("m")

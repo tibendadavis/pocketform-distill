@@ -23,7 +23,7 @@ def test_integer_respects_min_max():
 
 
 def test_integer_defaults_fit_digit_cells():
-    vals = samples(field(type="integer", digits=2))
+    vals = samples(field(type="integer", cells=2))
     assert all(0 <= v <= 99 for v in vals)
 
 
@@ -62,3 +62,26 @@ def test_same_seed_same_values():
     f = field(type="integer", max=500)
     assert samples(f, seed=7) == samples(f, seed=7)
     assert samples(f, seed=7) != samples(f, seed=8)
+
+
+def test_code_fills_every_cell_with_letters_and_digits():
+    vals = samples(field(type="code", cells=9))
+    assert all(isinstance(v, str) and len(v) == 9 and v.isalnum() and v == v.upper() for v in vals)
+    chars = "".join(vals)
+    assert any(c.isdigit() for c in chars) and any(c.isalpha() for c in chars)
+    assert any(v.startswith("0") for v in vals)  # a code can start with 0: stored as a string, kept
+    assert not set(chars) & {"I", "O"}  # look like 1 and 0 when handwritten
+
+
+def test_code_pattern():
+    vals = samples(field(type="code", cells=7, pattern="AA-9999"))
+    assert all(v[:2].isalpha() and v[2] == "-" and v[3:].isdigit() for v in vals)
+
+
+def test_code_values_win():
+    assert set(samples(field(type="code", cells=4, values=["AB12", "0042"]))) == {"AB12", "0042"}
+
+
+def test_mark_picks_an_option():
+    f = field(type="mark", options=["x", "y", "z"], option_boxes=[(0, 0, 5, 5), (6, 0, 5, 5), (12, 0, 5, 5)])
+    assert set(samples(f)) == {"x", "y", "z"}

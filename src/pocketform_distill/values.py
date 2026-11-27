@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+import string
 from datetime import date, timedelta
 
 from pocketform_distill.config import FormField
@@ -20,7 +21,7 @@ _SYLLABLES = ["ka", "ki", "mu", "na", "ba", "lo", "re", "sa", "to", "wa", "ni", 
 
 def int_range(f: FormField) -> tuple[int, int]:
     lo = f.min if isinstance(f.min, int) else 0
-    hi = f.max if isinstance(f.max, int) else (10**f.digits - 1 if f.digits else DEFAULT_INT_MAX)
+    hi = f.max if isinstance(f.max, int) else (10**f.cells - 1 if f.cells else DEFAULT_INT_MAX)
     return lo, hi
 
 
@@ -53,14 +54,38 @@ def sample_text(f: FormField, rng: random.Random) -> str:
     return " ".join(words)
 
 
+# No I or O: handwritten, they look exactly like 1 and 0, so no reader (teacher, student or person) could tell them
+# apart and the truth would teach guessing. Many real code schemes leave them out for the same reason. If a form's
+# codes do use them, list real codes in `values`.
+CODE_CHARS = {"A": "".join(c for c in string.ascii_uppercase if c not in "IO"), "9": string.digits}
+
+
+def sample_code(f: FormField, rng: random.Random) -> str:
+    """A code from `values`, or built from `pattern` (A = letter, 9 = digit, * = either, else literal).
+
+    Without a pattern every cell gets a letter or digit (50/50), so all cells are filled, as codes are.
+    """
+    if f.values:
+        return rng.choice(f.values)
+    pattern = f.pattern or "*" * (f.cells or rng.randint(4, 8))
+    out = []
+    for p in pattern:
+        if p == "*":
+            p = rng.choice("A9")
+        out.append(rng.choice(CODE_CHARS[p]) if p in CODE_CHARS else p)
+    return "".join(out)
+
+
 def sample_value(f: FormField, rng: random.Random) -> int | str:
-    """The truth value as it is stored in {id}.json (dates as ISO strings)."""
+    """The truth value as it is stored in {id}.json (dates as ISO strings, codes and options as strings)."""
     if f.type == "integer":
         return sample_int(f, rng)
     if f.type == "date":
         return sample_date(f, rng).isoformat()
-    if f.type == "choice":
+    if f.type in ("choice", "mark"):
         return rng.choice(f.options)
+    if f.type == "code":
+        return sample_code(f, rng)
     return sample_text(f, rng)
 
 

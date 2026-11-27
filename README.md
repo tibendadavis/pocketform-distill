@@ -108,10 +108,12 @@ How a photo is made:
 1. **Blank.** The section's `template_image`: a clean image of that section of the empty form.
 2. **Values.** Each field is left empty with probability `synth.empty_rate`, otherwise it gets a random value that
    respects its type: integers within `min`/`max` and skewed towards small counts, dates within `min`/`max`, choices
-   from `options`, text from `values` if given.
+   and marks from `options`, text from `values` if given, codes from `values` or `pattern` (letters and digits
+   in every cell by default).
 3. **Handwriting.** One "writer" per photo (one of the OFL handwriting fonts in `assets/fonts/handwriting/`, a pen
-   colour, a slant and a neatness) writes each value with random size, offset and rotation inside its box. Comb
-   integer fields (`digits: 3`) get one right-aligned digit per cell.
+   colour, a slant, a neatness and a way of marking circles) writes each value with random size, offset and
+   rotation inside its box. Comb fields (`cells: 3`) get one character per cell: right-aligned for integers, from
+   the first cell for codes. A `mark` field gets a fill, scribble, tick or cross on the chosen option's circle.
 4. **Photo defects.** Each defect under `synth.augment` is applied with its own probability `p`: paper tint, uneven
    shading, rotation (±3°), perspective, blur, brightness/contrast, sensor noise and JPEG (quality 50-90). The
    comments in `configs/_template.yaml` say which phone-photo flaw each one imitates.
@@ -133,7 +135,8 @@ already distorted before synth adds its own defects, and real filled forms are k
 `uv run python scripts/pick_boxes.py --form forms/<form> --section <id> --write` (`--section` can be left out when
 the form has one section). A window opens that section's template and walks its fields in `form.yaml` order. The bottom bar names the field and its label, and an orange dashed rectangle shows
 where `form.yaml` currently puts it. For each field, click the top-left then the bottom-right corner of its writing
-area. For a comb field, take all digit cells as one box. Enter keeps the orange box, u undoes, s skips, q finishes.
+area. For a comb field, take all cells as one box. For a `mark` field the bar walks through its options: box each
+option's printed circle. Enter keeps the orange box, u undoes, s skips, q finishes.
 `--write` saves the boxes into `form.yaml` (previous version in `form.yaml.bak`); without it they are only printed.
 
 ## The prompt
@@ -155,9 +158,24 @@ under the same prompt.
   hard synthetic forms, with 94 fewer prompt tokens. Every section of every sectioned form gets the same wording with
   its own fields. A new kind means a new
   `kind` value plus a builder in `prompt.BUILDERS`; a test fails if one is missing.
-- **The answer format lives next to it.** `format_answer` gives the exact target text: one line of JSON, keys in
-  `form.yaml` order, `null` for empty. `parse_answer` reads a reply back. Without the example line, `qwen3.5:9b`
-  answered in fenced, pretty-printed JSON that doesn't match the target token for token.
+- **The answer format lives next to it.** `format_answer` gives the exact target text: one line of JSON in
+  `form.yaml` order, `null` for empty. A field on its own is `"field_id": value`. Side-by-side fields of one type
+  (a table row) are answered as short lists, left to right: `"cured_mam_m": [3, null, 12]`. A list's key is the
+  part of its field ids they all share, so name grid fields `<row>_<column>` (`cured_mam_m_6_11m`). A row of more
+  than 3 fields is split where the next word of the ids changes (`cured_mam_m_*` | `cured_mam_f_*` | ...).
+  Field ids are most of an answer's tokens and the phone generates every one, but one list per long row made the
+  teacher lose its place. On 6 synthetic photos of the nutrition form's section D (6 rows x 12 columns):
+
+  | Answer format | Fields right (`qwen3.5:9b`) | Answer tokens | Teacher time |
+  |---|---|---|---|
+  | one key per field | 83% | ~1360 | 35 s |
+  | one list per row (12 values) | 78% | ~255 | 13 s |
+  | lists of at most 3 (used) | 90% | ~400 | 18 s |
+
+  Each list names its own columns in the prompt (`- cured_mam_f (3 values: MAM Female 6-11 m | ...): Cured`).
+  Saying the shared `6-11 m | 12-23 m | 24-59 m` once instead saved ~850 prompt tokens but dropped D to 78%.
+  `parse_answer` reads a reply back into `{field id: value}`. Without the example line, `qwen3.5:9b` answered in
+  fenced, pretty-printed JSON that doesn't match the target token for token.
 - **Checked by hash.** Each stage will record `prompt_info` (kind, section, sha256) in its `run.json`, so outputs made with
   different prompts can't be mixed by mistake. Labels and field order are part of the prompt; boxes are not, so
   re-picking boxes doesn't invalidate teacher outputs.
@@ -212,12 +230,14 @@ one on purpose, add `!forms/<your-form>/` and `!configs/<your-run>.yaml` to `.gi
 | `sections[].groups[].id`, `title` | Related fields under one printed heading |
 | `…groups[].fields[].id` | Unique across the whole form; the key used in outputs |
 | `…fields[].label` | What the field means. In a grid write `"<row>, <column>"`, which the prompt uses for row and column names |
-| `…fields[].type` | `text` (any handwriting), `integer`, `date`, `choice` |
-| `…fields[].box` | `[x, y, w, h]` in template pixels; get them with `scripts/pick_boxes.py` |
-| `…fields[].options` | Allowed values for `choice` fields |
-| `…fields[].values` | Optional realistic values for `text` fields |
+| `…fields[].type` | `text` (any handwriting), `integer` (a count), `code` (letters and/or digits copied exactly, leading zeros kept), `date`, `choice` (option written as a word), `mark` (option chosen by filling / ticking / crossing its printed circle) |
+| `…fields[].box` | `[x, y, w, h]` in template pixels; get them with `scripts/pick_boxes.py`. Optional for `mark` (the area around its option boxes) |
+| `…fields[].options` | Allowed values for `choice` and `mark` fields |
+| `…fields[].option_boxes` | `mark` only: one `[x, y, w, h]` per option, same order, around its printed circle |
+| `…fields[].values` | Optional realistic values for `text` and `code` fields |
 | `…fields[].min`, `max` | Optional range for `integer` (numbers) or `date` (`2024-01-01`) fields |
-| `…fields[].digits` | `integer` only: number of printed digit cells (a comb box), one digit per cell |
+| `…fields[].cells` | `integer` and `code`: number of printed cells (a comb box), one character per cell |
+| `…fields[].pattern` | `code` only: shape of synthetic codes, `A` = letter, `9` = digit, `*` = either, anything else as is (`AA-9999`). Default: `*` per cell |
 | `…fields[].format` | `date` only: how people write it (default `%d/%m/%Y`). Truth is always ISO |
 
 **Run config** (`configs/<run>.yaml`)

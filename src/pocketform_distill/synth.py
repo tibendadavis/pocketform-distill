@@ -64,7 +64,11 @@ def generate_photo(section: Section, blank: Image.Image, cfg: SynthConfig, fonts
     writer = Writer.random(fonts, cfg.ink_colors, rng)
     ink = Image.new("L", blank.size, 0)
     for f in section.fields:
-        if truth[f.id] is not None:
+        if truth[f.id] is None:
+            continue
+        if f.type == "mark":
+            writer.mark_option(ink, f, truth[f.id], rng)
+        else:
             writer.write(ink, f, written_text(f, truth[f.id]), rng)
     img, defects = apply_photo_defects(writer.apply(blank, ink), cfg.augment, rng)
     writer_info = asdict(writer) | {"font": Path(writer.font).name}

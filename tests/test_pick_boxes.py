@@ -38,3 +38,16 @@ def test_write_boxes_handles_one_line_fields(tmp_path):
         "  - {id: a_1, label: A, type: integer, box: [1, 1, 1, 1]}",
         "  - {id: a, label: B, type: integer, box: [9, 9, 9, 9]}",
     ]
+
+
+def test_write_boxes_updates_mark_option_boxes(tmp_path):
+    form_yaml = tmp_path / "form.yaml"
+    form_yaml.write_text(
+        "fields:\n"
+        "  - id: region\n    label: Region\n    type: mark\n    options: [North, South]\n"
+        "    option_boxes: [[1, 1, 10, 10], [20, 1, 10, 10]]\n"
+        "  - {id: count, label: Count, type: integer, box: [2, 2, 2, 2]}\n")
+    pick_boxes.write_boxes(form_yaml, {"count": (7, 7, 7, 7)}, {"region": [(3, 3, 9, 9), (30, 3, 9, 9)]})
+    fields = yaml.safe_load(form_yaml.read_text())["fields"]
+    assert fields[0]["option_boxes"] == [[3, 3, 9, 9], [30, 3, 9, 9]]
+    assert fields[1]["box"] == [7, 7, 7, 7]
