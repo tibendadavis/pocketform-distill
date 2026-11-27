@@ -62,8 +62,8 @@ GPUs, and float32 on CPU.
 [--top 20] [--show-prompt]` sends the form's prompt to Ollama with logprobs on and prints:
 
 - the teacher's output and tokens/s
-- for a synthetic image (truth `{id}.json` next to it): fields correct, and whether the reply is exactly the target
-  format. It must be, or the teacher's tokens won't line up with what the student learns.
+- for a synthetic image (truth `{id}.json` next to it): fields correct, and whether the reply is exactly the one-line
+  target. Not required: the dataset stage lines up the teacher's probabilities field by field.
 - the top alternatives for the first 5 tokens
 - a **tokenizer check**: the share of teacher tokens that map to exactly one student token id. Ollama returns tokens
   as text and bytes rather than ids, and distillation compares the two models token by token, so the tokens must map
@@ -139,6 +139,55 @@ area. For a comb field, take all cells as one box. For a `mark` field the bar wa
 option's printed circle. Enter keeps the orange box, u undoes, s skips, q finishes.
 `--write` saves the boxes into `form.yaml` (previous version in `form.yaml.bak`); without it they are only printed.
 
+## Stage 2: teacher
+
+```bash
+uv run pocketform-distill teacher --config configs/<run>.yaml            # all photos; resumable
+uv run pocketform-distill teacher --config configs/<run>.yaml --limit 5  # try a few first
+```
+
+The teacher (`teacher.model` in Ollama) reads every synth photo: the section's prompt plus the preprocessed image,
+temperature 0, JSON mode (no code fences). It writes `data/<run_name>/teacher/{id}.json` per photo: the reply,
+every generated token with its log-probability and its `teacher.top_logprobs` most likely alternatives (the soft
+labels), the reply parsed into values, and which fields match the synthetic truth. `run.json` adds the teacher's
+field accuracy per section. It prints progress and the time left per photo, then the accuracy per section.
+
+**Resumable.** Each record stores a hash of the model, its settings, the prompt and the image. A photo whose hash
+still matches is skipped, so stopping it (Ctrl-C) and starting again carries on, and raising `synth.num_photos` only
+labels the new photos. Changing the prompt, the teacher or `image.max_pixels` relabels the photos it affects.
+Records for photos that no longer exist are removed. Stop other heavy apps while it runs, and stop the model
+(`ollama stop <tag>`) before training: the teacher and the student don't fit in 16 GB together.
+
+**Image preprocessing** (`preprocess.py`, used by the teacher, training, eval and the phone): turn upright from EXIF,
+RGB, shrink only if larger than `image.max_pixels`, then pad right and bottom with the edge colour so both sides are
+a multiple of 32 (the student's 16 px patches merged 2 x 2). The student's processor then leaves the image as it is,
+so teacher and student see the same pixels. Padding instead of resizing keeps small digit cells sharp: resampling
+a 1234 x 516 section to 1216 x 512 cost the teacher a few points on the nutrition form's section D.
+
+## Stage 3: dataset
+
+```bash
+uv run pocketform-distill dataset --config configs/<run>.yaml
+```
+
+Builds `data/<run_name>/dataset/train.jsonl` and `val.jsonl` (the split comes from synth), one example per photo:
+the image path, the target and its student token ids, and soft labels at some target positions.
+
+- **Target = the truth** in the answer format (one line, short lists), the hard label at every position. This is
+  what the student writes on the phone, and `prompt.parse_answer` turns it into `{field id: value}`.
+- **Soft labels** = the teacher's top-k probabilities, mapped to student token ids (`token_mapping.py`), on the
+  positions that carry knowledge: a field's value tokens, the token before it (empty or not: `" "` vs `" null"`)
+  and the token after it (does the number go on: `","` vs another digit). On qwen3.5:9b, keys were never under
+  99% sure (0 of 243 tokens) while values often were (61 of 191).
+- **Lined up field by field**, so the teacher's layout doesn't matter: it often spreads long answers over lines,
+  but a value and its neighbours are the same text either way. A position gets a soft label only when the
+  teacher's token there is exactly the student's.
+- **Misread fields get no soft labels**, only the truth: the student shouldn't learn the teacher's mistakes.
+
+The command prints per section how often the teacher was right and the share of value positions with soft labels.
+A low share means distillation adds little over plain fine-tuning there. The stage refuses teacher records made
+with a different prompt.
+
 ## The prompt
 
 ```bash
@@ -206,8 +255,12 @@ scripts/teacher_smoke_test.py   teacher smoke test
 src/pocketform_distill/         the package (CLI: `pocketform-distill`)
   config.py                     typed run config + form spec (pydantic)
   prompt.py                     the prompt per form kind + the answer format (used by every stage)
+  preprocess.py                 the image preprocessing (used by every stage that shows a model an image)
   synth.py, values.py,          stage 1: values, handwriting, phone-photo defects
   render.py, augment.py
+  teacher.py                    stage 2: teacher answers + probabilities (Ollama), resumable
+  dataset.py                    stage 3: targets (truth) + soft labels lined up field by field
+  token_mapping.py              teacher token (text/bytes) -> student token id
 tests/                          offline unit tests (no model downloads)
 private/, data/                 real photos and stage outputs (git-ignored)
 ```
@@ -273,7 +326,9 @@ would be included.
 ## Roadmap
 
 - [x] Stage 1: synth
-- [ ] Pipeline stages: teacher, dataset, train, eval, export
+- [x] Stage 2: teacher
+- [x] Stage 3: dataset
+- [ ] Stages: train, eval, export
 - [ ] Resolution sweep on `image.max_pixels`
 - [ ] int8 / int4 quantization
 - [ ] On-device test with LiteRT
