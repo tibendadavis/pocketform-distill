@@ -58,7 +58,7 @@ train:
   soft_label_weight: 0.5
 
 targets:
-  field_accuracy: 0.80
+  field_accuracy: 0.90
 
 export:
   format: json
