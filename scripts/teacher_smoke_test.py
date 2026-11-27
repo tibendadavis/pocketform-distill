@@ -1,19 +1,17 @@
 """Teacher smoke test. See README."""
 
 import argparse
+import json
 import math
 import time
+from pathlib import Path
 
 import ollama
 from transformers import AutoTokenizer
 
+from pocketform_distill.config import load_form
+from pocketform_distill.prompt import build_prompt, format_answer, parse_answer
 from pocketform_distill.token_mapping import to_student_id
-
-PROMPT = (
-    "This is a photo of a handwritten form. "
-    "Extract every filled-in field as a JSON object mapping field label to value. "
-    "Use null for empty fields. Return only the JSON."
-)
 
 
 def main() -> None:
@@ -22,12 +20,18 @@ def main() -> None:
     p.add_argument("--teacher", required=True, help="Ollama model tag, e.g. from `ollama list`")
     p.add_argument("--student", default="Qwen/Qwen3.5-0.8B")
     p.add_argument("--top", type=int, default=20)
+    p.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
+    p.add_argument("--show-prompt", action="store_true")
     args = p.parse_args()
+    spec = load_form(args.form)
+    prompt = build_prompt(spec)
+    if args.show_prompt:
+        print(f"--- Prompt ---\n{prompt}\n")
 
     t0 = time.time()
     resp = ollama.chat(
         model=args.teacher,
-        messages=[{"role": "user", "content": PROMPT, "images": [args.image_path]}],
+        messages=[{"role": "user", "content": prompt, "images": [args.image_path]}],
         think=False,
         logprobs=True,
         top_logprobs=args.top,
@@ -37,6 +41,23 @@ def main() -> None:
     print(f"--- Teacher output ({elapsed:.1f}s) ---\n{resp['message']['content']}\n")
     if resp.get("eval_count") and resp.get("eval_duration"):
         print(f"Speed: {resp['eval_count']} tokens, {resp['eval_count'] / (resp['eval_duration'] / 1e9):.1f} tok/s\n")
+
+    # Synthetic forms have their truth next to them ({id}.json): score the answer against it.
+    truth_path = Path(args.image_path).with_suffix(".json")
+    if truth_path.exists():
+        truth = json.loads(truth_path.read_text())
+        answer = resp["message"]["content"]
+        try:
+            got = parse_answer(spec, answer)
+            right = sum(got[k] == truth[k] for k in truth)
+            print(f"--- vs truth ({truth_path.name}) ---\n{right}/{len(truth)} fields correct")
+            for k in truth:
+                if got[k] != truth[k]:
+                    print(f"  {k}: got {got[k]!r}, truth {truth[k]!r}")
+        except ValueError as e:
+            print(f"--- vs truth ---\nCould not parse the answer: {e}")
+        exact = answer.strip() == format_answer(spec, truth)
+        print(f"Exact target format: {'yes' if exact else 'no'} (needed for token-level soft labels)\n")
 
     logprobs = resp.get("logprobs") or []
     if not logprobs:

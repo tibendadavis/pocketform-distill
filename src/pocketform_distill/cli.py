@@ -29,6 +29,20 @@ def synth(
     typer.echo(f"Wrote {cfg.synth.num_forms} forms to {out} ({dict(splits)})")
 
 
+@app.command()
+def prompt(
+    config: Annotated[Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Run config YAML")],
+) -> None:
+    """Print the exact prompt every stage sends for this run's form, and its sha256."""
+    from pocketform_distill.config import load_run_config
+    from pocketform_distill.prompt import build_prompt, prompt_info
+
+    spec = load_run_config(config).load_form()
+    info = prompt_info(spec)
+    typer.echo(build_prompt(spec))
+    typer.echo(f"\n# kind={info['kind']} chars={info['chars']} sha256={info['sha256']}", err=True)
+
+
 @app.command("version")
 def show_version() -> None:
     """Print the package version."""
