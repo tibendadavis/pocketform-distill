@@ -11,6 +11,9 @@ import time
 import torch
 from transformers import AutoModelForMultimodalLM, AutoProcessor
 
+from pocketform_distill.config import load_form
+from pocketform_distill.prompt import build_prompt
+
 
 def pick_device(requested: str) -> str:
     if requested != "auto":
@@ -30,20 +33,17 @@ def pick_dtype(device: str) -> torch.dtype:
     return torch.float32
 
 
-PROMPT = (
-    "This is a photo of a handwritten form. "
-    "Extract every filled-in field as a JSON object mapping field label to value. "
-    "Use null for empty fields. Return only the JSON."
-)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("image_path")
     parser.add_argument("--model", default="Qwen/Qwen3.5-0.8B")
     parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
+    parser.add_argument("--section", help="section the photo shows (default: the form's only section)")
     args = parser.parse_args()
+    spec = load_form(args.form)
+    prompt = build_prompt(spec, spec.section(args.section))
     image_path, model_id = args.image_path, args.model
     device = pick_device(args.device)
     dtype = pick_dtype(device)
@@ -65,7 +65,7 @@ def main() -> None:
             "role": "user",
             "content": [
                 {"type": "image", "path": image_path},
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
             ],
         }
     ]

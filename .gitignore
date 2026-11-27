@@ -9,6 +9,7 @@ wheels/
 
 private/
 data/
+learning/
 mlruns/
 mlartifacts/
 
@@ -23,9 +24,13 @@ mlartifacts/
 *.HEIC
 *.png
 *.PNG
+*.ipynb
 !forms/*/template.png
+!forms/*/template-*.png
 
 forms/*
 !forms/_template/
 configs/*
 !configs/_template.yaml
+
+*.bak

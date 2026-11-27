@@ -6,7 +6,7 @@ Teach a phone-sized vision-language model to read one paper form layout by disti
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/tibendadavis/pocketform-distill/actions/workflows/ci.yml/badge.svg)](https://github.com/tibendadavis/pocketform-distill/actions/workflows/ci.yml)
 
-> **Status: early.** Setup and the student and teacher smoke tests work. The pipeline stages are not built yet.
+> **Status: early.** Smoke tests and stage 1 (synth) work. Stages 2-6 are not built yet.
 
 ## Why
 
@@ -52,22 +52,115 @@ uv run python scripts/smoke_test.py path/to/form.jpg
 uv run python scripts/teacher_smoke_test.py path/to/form.jpg --teacher qwen3.5:9b
 ```
 
-**Student smoke test:** `smoke_test.py <image> [--model <hf-id>] [--device auto|cuda|mps|cpu] [--max-new-tokens 512]`
-runs the extraction prompt on one image with greedy decoding. It prints the device, load time, memory use, the output
+**Student smoke test:** `smoke_test.py <image> [--form forms/<form>] [--model <hf-id>] [--device auto|cuda|mps|cpu]
+[--max-new-tokens 512]` runs the form's prompt (from `prompt.py`) on one image with greedy decoding. It prints the device, load time, memory use, the output
 with tokens/s, and the top-5 probabilities for the first 5 output tokens. An untrained student gives poor output, so the
 test passes if it runs and prints probabilities. The dtype is bfloat16 on GPUs that support it, float16 on older NVIDIA
 GPUs, and float32 on CPU.
 
-**Teacher smoke test:** `teacher_smoke_test.py <image> --teacher <tag> [--student <hf-id>] [--top 20]` calls Ollama
-with logprobs on and prints:
+**Teacher smoke test:** `teacher_smoke_test.py <image> --teacher <tag> [--form forms/<form>] [--student <hf-id>]
+[--top 20] [--show-prompt]` sends the form's prompt to Ollama with logprobs on and prints:
 
 - the teacher's output and tokens/s
+- for a synthetic image (truth `{id}.json` next to it): fields correct, and whether the reply is exactly the target
+  format. It must be, or the teacher's tokens won't line up with what the student learns.
 - the top alternatives for the first 5 tokens
 - a **tokenizer check**: the share of teacher tokens that map to exactly one student token id. Ollama returns tokens
   as text and bytes rather than ids, and distillation compares the two models token by token, so the tokens must map
   back. Over 99% prints `PASS`, anything lower prints `CHECK`.
 - the **"< 99% sure" count**: positions where the teacher's top choice had under 99% probability. It must be above 0,
   or the logprobs carry no soft-label signal.
+
+## Terms
+
+| Term | Meaning |
+|---|---|
+| **form** | The whole paper form, described by `forms/<form>/form.yaml`. Its `kind` says how it is laid out and photographed |
+| **section** | For `kind: sectioned`: one part of the page, marked by three printed corner squares. The user photographs one section at a time, and every stage works on one section photo at a time: fewer image tokens, fewer fields to confuse |
+| **group** | Related fields inside a section, under one printed heading (e.g. MUAC, Bilateral oedema) |
+| **field** | One handwritten value, with a box on the section's template image |
+
+Only `sectioned` exists today. A later kind, such as one photo of a whole single-layout form, would get its own
+spec shape and prompt builder.
+
+**One student per form.** A single student model learns to read every section of its form. The prompt tells it which
+section the photo shows, so the phone ships one model per form, not one per section. Training data mixes all
+sections, and eval reports accuracy per section as well as overall.
+
+## Stage 1: synth
+
+```bash
+uv run pocketform-distill synth --config configs/_template.yaml
+```
+
+Writes fake filled-in **section photos** with known answers to `data/<run_name>/synth/`, `synth.num_photos` per
+section:
+
+| File | Contents |
+|---|---|
+| `{id}.png` | the synthetic "phone photo" of one section; `id` = `<section>-<n>`, e.g. `b-00042` |
+| `{id}.json` | truth for that section's fields, keyed by field id; `null` = left empty |
+| `manifest.jsonl` | one line per photo: `id`, `section`, `split` (`train`/`val`), `seed`, and the `writer` and `defects` drawn from that seed |
+| `run.json` | the config, form spec, fonts, template image hash per section and git commit it ran with |
+
+How a photo is made:
+
+1. **Blank.** The section's `template_image`: a clean image of that section of the empty form.
+2. **Values.** Each field is left empty with probability `synth.empty_rate`, otherwise it gets a random value that
+   respects its type: integers within `min`/`max` and skewed towards small counts, dates within `min`/`max`, choices
+   from `options`, text from `values` if given.
+3. **Handwriting.** One "writer" per photo (one of the OFL handwriting fonts in `assets/fonts/handwriting/`, a pen
+   colour, a slant and a neatness) writes each value with random size, offset and rotation inside its box. Comb
+   integer fields (`digits: 3`) get one right-aligned digit per cell.
+4. **Photo defects.** Each defect under `synth.augment` is applied with its own probability `p`: paper tint, uneven
+   shading, rotation (±3°), perspective, blur, brightness/contrast, sensor noise and JPEG (quality 50-90). The
+   comments in `configs/_template.yaml` say which phone-photo flaw each one imitates.
+
+Each photo's seed is derived from `synth.seed`, its section id and its number (a hash, recorded as `seed` in
+the manifest), and the same config, templates and commit give byte-identical output on the same machine. Adding,
+removing or reordering sections, or raising `num_photos`, never changes a photo that already exists, so its
+teacher outputs stay valid. To trace a bad image, look up its line in `manifest.jsonl` (font, pen, and
+every defect with its values). In every section exactly `round(num_photos * val_fraction)` photos are marked `val`. Rerunning the stage replaces its folder. Synth never reads
+real photos, which are the test set only.
+
+**Setting up a form:** every section needs a template image, `forms/<form>/template-<section>.png`: a flat,
+straight-on image of that section of the **empty** form, cropped to its corner markers. Best is an export of the form's print file (PDF -> PNG, ~1000-1600 px wide). Next best is a scanner-app shot
+of an unfilled copy (iPhone Notes > Scan Documents, Google Drive > Scan, Microsoft Lens), which flattens and
+straightens it. Don't use a filled-in phone photo: its handwriting would sit under the synthetic handwriting, it is
+already distorted before synth adds its own defects, and real filled forms are kept for testing only.
+
+**Boxes for a template:** a box is where the handwriting for one field goes, in template pixels. Run
+`uv run python scripts/pick_boxes.py --form forms/<form> --section <id> --write` (`--section` can be left out when
+the form has one section). A window opens that section's template and walks its fields in `form.yaml` order. The bottom bar names the field and its label, and an orange dashed rectangle shows
+where `form.yaml` currently puts it. For each field, click the top-left then the bottom-right corner of its writing
+area. For a comb field, take all digit cells as one box. Enter keeps the orange box, u undoes, s skips, q finishes.
+`--write` saves the boxes into `form.yaml` (previous version in `form.yaml.bak`); without it they are only printed.
+
+## The prompt
+
+```bash
+uv run pocketform-distill prompt --config configs/_template.yaml
+```
+
+`src/pocketform_distill/prompt.py` is the only place a prompt is written. Every stage that talks to a model calls
+`build_prompt(form spec, section)`: one prompt per photo, so per section for a sectioned form, and later the exported bundle will ship that exact text to the phone. Distillation needs this:
+the teacher's probabilities are "what comes next, given this prompt and image", and the student learns to match them
+under the same prompt.
+
+- **One builder per form `kind`.** `sectioned` names the section and form, then lists the section's fields by group,
+  row by row, left to right (fields whose
+  boxes sit side by side form a row; labels written `"<row>, <column>"` give the row and column names), then the
+  answer rules and a one-line example. When digit boxes sit side by side it adds one rule: never join digits
+  across neighbouring groups. That rule and the row layout raised the teacher from 85.6% to 90.6% of fields on 8
+  hard synthetic forms, with 94 fewer prompt tokens. Every section of every sectioned form gets the same wording with
+  its own fields. A new kind means a new
+  `kind` value plus a builder in `prompt.BUILDERS`; a test fails if one is missing.
+- **The answer format lives next to it.** `format_answer` gives the exact target text: one line of JSON, keys in
+  `form.yaml` order, `null` for empty. `parse_answer` reads a reply back. Without the example line, `qwen3.5:9b`
+  answered in fenced, pretty-printed JSON that doesn't match the target token for token.
+- **Checked by hash.** Each stage will record `prompt_info` (kind, section, sha256) in its `run.json`, so outputs made with
+  different prompts can't be mixed by mistake. Labels and field order are part of the prompt; boxes are not, so
+  re-picking boxes doesn't invalidate teacher outputs.
 
 ## Requirements
 
@@ -86,11 +179,17 @@ AMD GPUs (ROCm) need a ROCm build of PyTorch, which this project does not config
 ## Project structure
 
 ```
-configs/_template.yaml          run config template: one form + teacher + student + targets
-forms/_template/form.yaml       form spec template (fictional form)
+assets/fonts/                   OFL handwriting fonts with their licences
+configs/_template.yaml          run config template: one form + teacher + student + synth + targets
+forms/_template/                form spec template: form.yaml + template-a.png (fictional form, one section, two groups)
+scripts/pick_boxes.py           click field boxes on a template image, print their coordinates
 scripts/smoke_test.py           student smoke test
 scripts/teacher_smoke_test.py   teacher smoke test
-src/pocketform_distill/         the package (CLI: `pocketform-distill`), incl. teacher→student token mapping
+src/pocketform_distill/         the package (CLI: `pocketform-distill`)
+  config.py                     typed run config + form spec (pydantic)
+  prompt.py                     the prompt per form kind + the answer format (used by every stage)
+  synth.py, values.py,          stage 1: values, handwriting, phone-photo defects
+  render.py, augment.py
 tests/                          offline unit tests (no model downloads)
 private/, data/                 real photos and stage outputs (git-ignored)
 ```
@@ -98,20 +197,28 @@ private/, data/                 real photos and stage outputs (git-ignored)
 ## Configuration
 
 To use your own form, copy `forms/_template/` to `forms/<your-form>/` and `configs/_template.yaml` to
-`configs/<your-run>.yaml`, then edit both. Your own form folders and run configs are git-ignored by default. To publish
+`configs/<your-run>.yaml`, replace `template-a.png` with a blank section of your form (one `template-<section>.png` per section), pick the
+boxes, then edit both. Your own form folders and run configs are git-ignored by default. To publish
 one on purpose, add `!forms/<your-form>/` and `!configs/<your-run>.yaml` to `.gitignore`.
 
 **Form spec** (`forms/<name>/form.yaml`)
 
 | Key | Meaning |
 |-----|---------|
-| `name`, `description` | Identifies the form |
-| `template_image` | Blank scan or photo of the form next to `form.yaml` (only `template.png` is committed) |
-| `fields[].id` | Unique key used in outputs |
-| `fields[].label` | Text as printed on the form |
-| `fields[].type` | `text` (any handwriting), `integer`, `date`, `choice` |
-| `fields[].options` | Allowed values for `choice` fields |
-| `fields[].min`, `max` | Optional range for `integer` fields, used to generate realistic synthetic values |
+| `name`, `description`, `version` | Identifies the form |
+| `kind` | Layout family. Only `sectioned` exists today: sections photographed one at a time |
+| `sections[].id`, `title`, `code`, `description` | One section: what one photo covers. `id` is used in photo ids and the prompt ("section B") |
+| `sections[].template_image` | Required. Clean image of the empty section, `template-<id>.png` next to `form.yaml` (only `_template`'s are committed) |
+| `sections[].groups[].id`, `title` | Related fields under one printed heading |
+| `…groups[].fields[].id` | Unique across the whole form; the key used in outputs |
+| `…fields[].label` | What the field means. In a grid write `"<row>, <column>"`, which the prompt uses for row and column names |
+| `…fields[].type` | `text` (any handwriting), `integer`, `date`, `choice` |
+| `…fields[].box` | `[x, y, w, h]` in template pixels; get them with `scripts/pick_boxes.py` |
+| `…fields[].options` | Allowed values for `choice` fields |
+| `…fields[].values` | Optional realistic values for `text` fields |
+| `…fields[].min`, `max` | Optional range for `integer` (numbers) or `date` (`2024-01-01`) fields |
+| `…fields[].digits` | `integer` only: number of printed digit cells (a comb box), one digit per cell |
+| `…fields[].format` | `date` only: how people write it (default `%d/%m/%Y`). Truth is always ISO |
 
 **Run config** (`configs/<run>.yaml`)
 
@@ -125,7 +232,12 @@ one on purpose, add `!forms/<your-form>/` and `!configs/<your-run>.yaml` to `.gi
 | `image.max_pixels` | Larger images are downscaled to this before they reach the model (~1 token per 1024 px). It must stay the same for training, eval and the phone. An uncapped 12 MP photo is ~12k tokens |
 | `student.model` | Hugging Face model id (Transformers / safetensors) |
 | `student.method` | `lora` or `full` fine-tuning |
-| `synth.num_forms` | Number of synthetic filled forms to generate |
+| `synth.num_photos` | Synthetic photos to generate per section |
+| `synth.seed` | Base seed; each photo's seed is derived from it, the section id and the photo number |
+| `synth.empty_rate` | Chance each field is left blank (truth `null`) |
+| `synth.val_fraction` | Exact share of each section's photos marked `val` |
+| `synth.fonts_dir`, `ink_colors` | Handwriting fonts and pen colours |
+| `synth.augment.<defect>` | `p` (probability) and the range for each photo defect |
 | `train.soft_label_weight` | Balance between matching the teacher's probabilities and the ground truth |
 | `targets` | Thresholds that eval reports pass or fail against |
 | `export.format` | `json`. Exporters are pluggable, so other output formats can be added |
@@ -133,16 +245,16 @@ one on purpose, add `!forms/<your-form>/` and `!configs/<your-run>.yaml` to `.gi
 ## Data and privacy
 
 Only synthetic data and templates are committed. `.gitignore` excludes `private/` and `data/` (real photos and stage
-outputs), all photos (`*.jpg`, `*.jpeg`, `*.heic`, `*.png`, except `forms/*/template.png`), model weights
+outputs), all photos (`*.jpg`, `*.jpeg`, `*.heic`, `*.png`, except `forms/*/template.png` and `forms/*/template-*.png`), model weights
 (`*.safetensors`, `*.gguf`), MLflow runs (`mlruns/`, `mlartifacts/`), and every form and run config except the
 `_template` ones, because a real form layout can be sensitive. Run `git add -n .` before committing to check what
 would be included.
 
 ## Roadmap
 
-- [ ] Pipeline stages: synth, teacher, dataset, train, eval, export
+- [x] Stage 1: synth
+- [ ] Pipeline stages: teacher, dataset, train, eval, export
 - [ ] Resolution sweep on `image.max_pixels`
-- [ ] Shorter output format (field ids instead of labels)
 - [ ] int8 / int4 quantization
 - [ ] On-device test with LiteRT
 
