@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 
 from pocketform_distill.config import AugmentConfig, RunConfig, load_run_config
-from pocketform_distill.synth import blank_template, generate_form, list_fonts, make_truth, run_synth, val_indices
+from pocketform_distill.synth import generate_form, list_fonts, make_truth, run_synth, val_indices
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -90,7 +90,7 @@ def test_empty_fields_get_no_ink():
     no_aug = AugmentConfig(**{k: {"p": 0.0} for k in AugmentConfig.model_fields})
     cfg = config(empty_rate=1.0, augment=no_aug)
     spec = cfg.load_form()
-    blank = blank_template(spec)
+    blank = spec.open_template()
     img, truth = generate_form(spec, blank, cfg.synth, list_fonts(cfg.synth.fonts_dir), seed=0)
     assert all(v is None for v in truth.values())
     assert np.array_equal(np.asarray(img), np.asarray(blank))
@@ -100,7 +100,7 @@ def test_filled_fields_get_ink_inside_their_box():
     no_aug = AugmentConfig(**{k: {"p": 0.0} for k in AugmentConfig.model_fields})
     cfg = config(empty_rate=0.0, augment=no_aug)
     spec = cfg.load_form()
-    blank = blank_template(spec)
+    blank = spec.open_template()
     img, _ = generate_form(spec, blank, cfg.synth, list_fonts(cfg.synth.fonts_dir), seed=0)
     diff = np.abs(np.asarray(img, np.int16) - np.asarray(blank, np.int16)).sum(-1) > 0
     for f in spec.fields:

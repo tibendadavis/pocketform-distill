@@ -1,4 +1,4 @@
-"""Draw a blank form from its spec, and write handwriting into field boxes.
+"""Write handwriting into the field boxes of a blank template.
 
 Handwriting is drawn into a separate greyscale "ink" layer (0 = no ink, 255 = full ink) and composited onto the
 paper at the end. Keeping ink separate makes pen colour and pressure one step instead of a property of every glyph.
@@ -13,19 +13,14 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-from pocketform_distill.config import RGB, FormField, FormSpec, Printed
+from pocketform_distill.config import RGB, FormField
 
-PRINT_FONTS = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "print"
 CELL_GAP = 4  # px between digit cells in a comb box
 
 
 @lru_cache(maxsize=64)
 def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(path, size)
-
-
-def _print_font(size: int, bold: bool) -> ImageFont.FreeTypeFont:
-    return _font(str(PRINT_FONTS / ("Lato-Bold.ttf" if bold else "Lato-Regular.ttf")), size)
 
 
 def cells(f: FormField) -> list[tuple[int, int, int, int]]:
@@ -35,46 +30,6 @@ def cells(f: FormField) -> list[tuple[int, int, int, int]]:
         return [f.box]
     cw = (w - CELL_GAP * (f.digits - 1)) / f.digits
     return [(round(x + i * (cw + CELL_GAP)), y, round(cw), h) for i in range(f.digits)]
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# Blank template
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def _draw_printed(d: ImageDraw.ImageDraw, item: Printed) -> None:
-    if item.text is not None:
-        d.text(item.at, item.text, font=_print_font(item.size, item.bold), fill=item.color, anchor=item.anchor)
-    elif item.rect is not None:
-        x, y, w, h = item.rect
-        d.rectangle((x, y, x + w, y + h), fill=item.fill, outline=item.color if item.width else None,
-                    width=item.width)
-    elif item.line is not None:
-        d.line(item.line, fill=item.color, width=item.width)
-
-
-def draw_blank(spec: FormSpec) -> Image.Image:
-    """Blank form from the spec: printed decoration, alignment markers, labels and field boxes."""
-    img = Image.new("RGB", spec.page, spec.paper)
-    d = ImageDraw.Draw(img)
-    for item in spec.printed:
-        _draw_printed(d, item)
-    for x, y, w, h in spec.markers:
-        # Ring + solid centre, like the fiducials printed on many survey forms.
-        d.rectangle((x, y, x + w, y + h), outline=(20, 20, 20), width=max(2, w // 8))
-        m = w // 4
-        d.rectangle((x + m, y + m, x + w - m, y + h - m), fill=(20, 20, 20))
-    for section in spec.sections:
-        for item in section.printed:
-            _draw_printed(d, item)
-        for f in section.fields:
-            x, y, w, h = f.box
-            if f.print_label:
-                d.text((x - 12, y + h // 2), f.label, font=_print_font(min(18, max(10, h // 2)), False),
-                       fill=(60, 60, 60), anchor="rm")
-            for cx, cy, cw, ch in cells(f):
-                d.rectangle((cx, cy, cx + cw, cy + ch), outline=(70, 70, 70), width=1)
-    return img
 
 
 # ---------------------------------------------------------------------------------------------------------------

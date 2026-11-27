@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from PIL import Image, ImageOps
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -23,33 +24,6 @@ RGB = tuple[int, int, int]
 
 class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class Printed(Strict):
-    """One piece of printed (not handwritten) ink, used only when the blank template is drawn from the spec.
-
-    Exactly one of ``text``, ``rect`` or ``line`` is set.
-    """
-
-    text: str | None = None
-    at: tuple[int, int] | None = None  # anchor point for text
-    anchor: str = "lm"  # Pillow text anchor: l/m/r + t/m/b (e.g. "mm" = centred)
-    size: int = 16
-    bold: bool = False
-    rect: Box | None = None
-    line: tuple[int, int, int, int] | None = None  # x1, y1, x2, y2
-    width: int = 1
-    color: RGB = (40, 40, 40)
-    fill: RGB | None = None  # rect fill
-
-    @model_validator(mode="after")
-    def _one_kind(self) -> Printed:
-        kinds = [k for k in ("text", "rect", "line") if getattr(self, k) is not None]
-        if len(kinds) != 1:
-            raise ValueError(f"printed item needs exactly one of text/rect/line, got {kinds or 'none'}")
-        if self.text is not None and self.at is None:
-            raise ValueError(f"printed text {self.text!r} needs `at: [x, y]`")
-        return self
 
 
 class FormField(Strict):
@@ -65,7 +39,6 @@ class FormField(Strict):
     format: str = "%d/%m/%Y"
     options: list[str] | None = None  # choice
     values: list[str] | None = None  # text: realistic values to sample from
-    print_label: bool = True  # drawn blank only: print `label` to the left of the box
 
     @model_validator(mode="after")
     def _check_type_specific(self) -> FormField:
@@ -98,7 +71,6 @@ class Section(Strict):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     title: str | None = None
-    printed: list[Printed] = []
     fields: list[FormField]
 
 
@@ -109,13 +81,9 @@ class FormSpec(Strict):
     kind: Literal["sectioned"] = "sectioned"
     description: str = ""
     version: str | None = None
-    # Blank photo/scan of the form next to form.yaml. When null, a blank is drawn from `page`, `printed`,
-    # section titles, labels and boxes.
-    template_image: str | None = None
-    page: tuple[int, int] = (1000, 700)  # width, height of the drawn blank
-    paper: RGB = (250, 250, 248)
-    markers: list[Box] = []  # solid squares printed for page alignment (fiducials)
-    printed: list[Printed] = []
+    # Required: a flat, straight-on image of the BLANK form next to form.yaml (scan or export of the print file).
+    # Synth writes handwriting onto it and then adds the photo defects itself. Boxes are in its pixels.
+    template_image: str
     sections: list[Section]
     dhis2: dict[str, Any] | None = None  # mapping used by the export stage later
 
@@ -133,31 +101,33 @@ class FormSpec(Strict):
         dupes = sorted({i for i in ids if ids.count(i) > 1})
         if dupes:
             raise ValueError(f"duplicate field ids: {dupes}")
-        if self.template_image is None:
-            w, h = self.page
-            for f in self.fields:
-                x, y, bw, bh = f.box
-                if x < 0 or y < 0 or x + bw > w or y + bh > h:
-                    raise ValueError(f"{f.id}: box {f.box} is outside the page {self.page}")
         return self
 
     @property
-    def template_path(self) -> Path | None:
-        if self.template_image is None:
-            return None
+    def template_path(self) -> Path:
         return (self.folder or Path(".")) / self.template_image
+
+    def open_template(self) -> Image.Image:
+        """The blank template, upright (phone and scanner images often store rotation in EXIF), as RGB."""
+        with Image.open(self.template_path) as img:
+            return ImageOps.exif_transpose(img).convert("RGB")
 
 
 def load_form(folder: str | Path) -> FormSpec:
+    """Load and validate a form folder: form.yaml plus its template image, with every box inside the image."""
     folder = Path(folder)
-    data = yaml.safe_load((folder / "form.yaml").read_text())
-    spec = FormSpec.model_validate(data)
+    spec = FormSpec.model_validate(yaml.safe_load((folder / "form.yaml").read_text()))
     spec.folder = folder
-    if spec.template_path is not None and not spec.template_path.exists():
+    if not spec.template_path.exists():
         raise FileNotFoundError(
-            f"{spec.template_path} not found. Add the blank template image, or set `template_image: null` "
-            "to draw one from the spec."
+            f"{spec.template_path} not found. Every form needs a blank template image: scan or export the empty "
+            "form, save it there, then get the boxes with scripts/pick_boxes.py."
         )
+    w, h = spec.open_template().size
+    for f in spec.fields:
+        x, y, bw, bh = f.box
+        if x < 0 or y < 0 or x + bw > w or y + bh > h:
+            raise ValueError(f"{f.id}: box {list(f.box)} is outside the {w}x{h} template image")
     return spec
 
 

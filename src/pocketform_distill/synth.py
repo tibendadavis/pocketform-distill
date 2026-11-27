@@ -4,7 +4,6 @@ Writes to data/<run_name>/synth/:
     {id}.png         the synthetic "phone photo"
     {id}.json        truth keyed by field id, null = left empty
     manifest.jsonl   one line per form: id, split (train/val), seed
-    blank.png        the empty template the forms were written on (for checking the layout)
     run.json         config + git commit this ran with
 
 Never reads real forms (private/): they are the test set only.
@@ -22,14 +21,8 @@ from PIL import Image
 from pocketform_distill.augment import apply_photo_defects
 from pocketform_distill.config import FormSpec, RunConfig, SynthConfig
 from pocketform_distill.provenance import write_run_info
-from pocketform_distill.render import Writer, draw_blank
+from pocketform_distill.render import Writer
 from pocketform_distill.values import sample_value, written_text
-
-
-def blank_template(spec: FormSpec) -> Image.Image:
-    if spec.template_path is not None:
-        return Image.open(spec.template_path).convert("RGB")
-    return draw_blank(spec)
 
 
 def list_fonts(fonts_dir: Path) -> list[Path]:
@@ -66,7 +59,7 @@ def run_synth(config: RunConfig, data_root: Path = Path("data")) -> Path:
     spec = config.load_form()
     cfg = config.synth
     fonts = list_fonts(cfg.fonts_dir)
-    blank = blank_template(spec)
+    blank = spec.open_template()
 
     out = data_root / config.run_name / "synth"
     if out.exists():
@@ -84,6 +77,5 @@ def run_synth(config: RunConfig, data_root: Path = Path("data")) -> Path:
         manifest.append({"id": form_id, "split": "val" if i in val else "train", "seed": seed})
 
     (out / "manifest.jsonl").write_text("".join(json.dumps(m) + "\n" for m in manifest))
-    blank.save(out / "blank.png")
     write_run_info(out, "synth", config, form=spec.model_dump(mode="json"), fonts=[f.name for f in fonts])
     return out

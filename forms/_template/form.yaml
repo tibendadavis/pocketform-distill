@@ -1,33 +1,20 @@
 # Form spec template: a fictional two-section intake and tally sheet.
-# Copy this folder to forms/<your-form>/ and edit. Coordinates are pixels in the template image (or the drawn page).
+# Copy this folder to forms/<your-form>/, replace template.png with your blank form, and edit.
 name: _template
 kind: sectioned            # layout family. Only "sectioned" exists today: a stack of titled sections of fields
 description: Fictional paper intake and tally sheet
 version: "1.0"
 
-# Blank photo/scan of the form next to this file (only template.png is committed). null = draw a blank from this
-# spec (page, printed items, markers, labels and boxes), so the form works with no image assets at all.
-# With a real image, get each field's box with: uv run python scripts/pick_boxes.py forms/<form>/template.png
-template_image: null
-page: [1000, 700]          # width, height of the drawn blank
-
-markers:                   # solid alignment squares (fiducials) in three corners, [x, y, w, h]
-  - [55, 55, 28, 28]
-  - [917, 55, 28, 28]
-  - [55, 617, 28, 28]
-
-printed:                   # printed ink that is not a field: one of text / rect / line per item
-  - {rect: [40, 40, 920, 620], color: [190, 190, 190]}
-  - {text: "Fictional intake & tally sheet", at: [100, 70], size: 22, bold: true}
-  - {text: "DEMO-1  v1.0", at: [900, 70], anchor: rm, size: 13, color: [130, 130, 130]}
+# Required: a flat, straight-on image of the EMPTY form next to this file (only template.png is committed).
+# Best: export the form's print file (PDF -> PNG). Otherwise a scanner app shot of an unfilled copy.
+# Synth writes handwriting onto it and adds the phone-photo defects itself, so it should be clean.
+# Boxes below are pixels in this image; get them with:
+#   uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form>
+template_image: template.png
 
 sections:
   - id: visit
     title: A  Visit
-    printed:
-      - {rect: [80, 112, 840, 32], fill: [228, 228, 228], width: 0}
-      - {text: "A  Visit", at: [96, 128], size: 18, bold: true}
-      - {text: "morning / afternoon / evening", at: [470, 295], size: 14, color: [120, 120, 120]}
     fields:
       # box: [x, y, w, h]. type: text | integer | date | choice
       - id: site_name
@@ -50,9 +37,6 @@ sections:
 
   - id: tally
     title: B  Tally
-    printed:
-      - {rect: [80, 345, 840, 32], fill: [228, 228, 228], width: 0}
-      - {text: "B  Tally", at: [96, 361], size: 18, bold: true}
     fields:
       - id: arrivals_count
         label: Arrivals
