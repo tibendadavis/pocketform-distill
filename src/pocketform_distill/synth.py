@@ -3,7 +3,8 @@
 Writes to data/<run_name>/synth/:
     {id}.png         the synthetic "phone photo"
     {id}.json        truth keyed by field id, null = left empty
-    manifest.jsonl   one line per form: id, split (train/val), seed
+    manifest.jsonl   one line per form: id, split (train/val), seed, plus the writer and photo defects drawn
+                     from that seed (for tracing bad images; regenerating only needs the seed)
     run.json         config + git commit this ran with
 
 Never reads real forms (private/): they are the test set only.
@@ -11,10 +12,13 @@ Never reads real forms (private/): they are the test set only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import shutil
+from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from PIL import Image
 
@@ -36,9 +40,22 @@ def make_truth(spec: FormSpec, cfg: SynthConfig, rng: random.Random) -> dict[str
     return {f.id: None if rng.random() < cfg.empty_rate else sample_value(f, rng) for f in spec.fields}
 
 
+def _rounded(x: Any) -> Any:
+    if isinstance(x, float):
+        return round(x, 3)
+    if isinstance(x, dict):
+        return {k: _rounded(v) for k, v in x.items()}
+    if isinstance(x, list | tuple):
+        return [_rounded(v) for v in x]
+    return x
+
+
 def generate_form(spec: FormSpec, blank: Image.Image, cfg: SynthConfig, fonts: list[Path], seed: int
-                  ) -> tuple[Image.Image, dict[str, int | str | None]]:
-    """One synthetic form: sample values, handwrite them, then photograph it badly."""
+                  ) -> tuple[Image.Image, dict[str, int | str | None], dict[str, Any]]:
+    """One synthetic form: sample values, handwrite them, then photograph it badly.
+
+    Returns the image, the truth, and what was drawn at random (writer + defects) for the manifest.
+    """
     rng = random.Random(seed)
     truth = make_truth(spec, cfg, rng)
     writer = Writer.random(fonts, cfg.ink_colors, rng)
@@ -46,8 +63,9 @@ def generate_form(spec: FormSpec, blank: Image.Image, cfg: SynthConfig, fonts: l
     for f in spec.fields:
         if truth[f.id] is not None:
             writer.write(ink, f, written_text(f, truth[f.id]), rng)
-    img, _ = apply_photo_defects(writer.apply(blank, ink), cfg.augment, rng)
-    return img, truth
+    img, defects = apply_photo_defects(writer.apply(blank, ink), cfg.augment, rng)
+    writer_info = asdict(writer) | {"font": Path(writer.font).name}
+    return img, truth, _rounded({"writer": writer_info, "defects": defects})
 
 
 def val_indices(n: int, val_fraction: float, seed: int) -> set[int]:
@@ -71,11 +89,12 @@ def run_synth(config: RunConfig, data_root: Path = Path("data")) -> Path:
     for i in range(cfg.num_forms):
         form_id = f"{i:05d}"
         seed = cfg.seed + i
-        img, truth = generate_form(spec, blank, cfg, fonts, seed)
+        img, truth, drawn = generate_form(spec, blank, cfg, fonts, seed)
         img.save(out / f"{form_id}.png")
         (out / f"{form_id}.json").write_text(json.dumps(truth, indent=2) + "\n")
-        manifest.append({"id": form_id, "split": "val" if i in val else "train", "seed": seed})
+        manifest.append({"id": form_id, "split": "val" if i in val else "train", "seed": seed, **drawn})
 
     (out / "manifest.jsonl").write_text("".join(json.dumps(m) + "\n" for m in manifest))
-    write_run_info(out, "synth", config, form=spec.model_dump(mode="json"), fonts=[f.name for f in fonts])
+    write_run_info(out, "synth", config, form=spec.model_dump(mode="json"), fonts=[f.name for f in fonts],
+                   template_sha256=hashlib.sha256(spec.template_path.read_bytes()).hexdigest())
     return out

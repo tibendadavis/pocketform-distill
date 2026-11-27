@@ -2,7 +2,8 @@
 
 Each defect is one small function with its own probability in ``synth.augment`` of the run config. They run in
 the order of ``STEPS`` (roughly the order things happen physically: light on paper -> camera pose -> lens ->
-sensor -> file). The defaults were tuned by eye against a real phone photo of a filled form: warm pink cast,
+sensor -> file). Each returns the image and the random parameters it drew, which synth records per form in
+manifest.jsonl so a bad-looking image can be traced to its settings. The defaults were tuned by eye against a real phone photo of a filled form: warm pink cast,
 low contrast (black ink reads as ~RGB 110,70,55), slight tilt and softness, and JPEG artefacts.
 """
 
@@ -12,6 +13,7 @@ import io
 import math
 import random
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -28,6 +30,8 @@ from pocketform_distill.config import (
     ShadingAug,
 )
 
+Out = tuple[Image.Image, dict[str, Any]]
+
 
 def _edge_fill(img: Image.Image) -> tuple[int, int, int]:
     """Colour for areas uncovered by rotation/perspective: a darker version of the page edge (the table)."""
@@ -35,15 +39,15 @@ def _edge_fill(img: Image.Image) -> tuple[int, int, int]:
     return tuple(int(c * 0.8) for c in patch)
 
 
-def paper_tint(img: Image.Image, c: PaperTintAug, rng: random.Random) -> Image.Image:
+def paper_tint(img: Image.Image, c: PaperTintAug, rng: random.Random) -> Out:
     """Warm indoor light / auto white balance: white paper photographs as pink, cream or grey."""
     base = rng.choice(c.colors)
-    tint = np.array([max(0, min(255, v + rng.randint(-c.jitter, c.jitter))) for v in base], np.float32) / 255
-    arr = np.asarray(img, dtype=np.float32) * tint
-    return Image.fromarray(arr.clip(0, 255).astype(np.uint8))
+    color = [max(0, min(255, v + rng.randint(-c.jitter, c.jitter))) for v in base]
+    arr = np.asarray(img, dtype=np.float32) * (np.array(color, np.float32) / 255)
+    return Image.fromarray(arr.clip(0, 255).astype(np.uint8)), {"color": color}
 
 
-def shading(img: Image.Image, c: ShadingAug, rng: random.Random) -> Image.Image:
+def shading(img: Image.Image, c: ShadingAug, rng: random.Random) -> Out:
     """Uneven light: one side of the page is darker (lamp falloff, the phone's or hand's shadow)."""
     w, h = img.size
     angle = rng.uniform(0, 2 * math.pi)
@@ -52,13 +56,14 @@ def shading(img: Image.Image, c: ShadingAug, rng: random.Random) -> Image.Image:
     t = (xx / w - 0.5) * math.cos(angle) + (yy / h - 0.5) * math.sin(angle)  # -0.7..0.7 along the direction
     gain = 1 - strength * (t - t.min()) / (t.max() - t.min())
     arr = np.asarray(img, dtype=np.float32) * gain[..., None]
-    return Image.fromarray(arr.clip(0, 255).astype(np.uint8))
+    return Image.fromarray(arr.clip(0, 255).astype(np.uint8)), {"direction_deg": math.degrees(angle),
+                                                                "strength": strength}
 
 
-def rotate(img: Image.Image, c: RotateAug, rng: random.Random) -> Image.Image:
+def rotate(img: Image.Image, c: RotateAug, rng: random.Random) -> Out:
     """Page not square to the camera frame: small in-plane rotation."""
-    return img.rotate(rng.uniform(-c.max_deg, c.max_deg), resample=Image.Resampling.BICUBIC,
-                      fillcolor=_edge_fill(img))
+    deg = rng.uniform(-c.max_deg, c.max_deg)
+    return img.rotate(deg, resample=Image.Resampling.BICUBIC, fillcolor=_edge_fill(img)), {"deg": deg}
 
 
 def _perspective_coeffs(dst: list[tuple[float, float]], src: list[tuple[float, float]]) -> list[float]:
@@ -71,41 +76,46 @@ def _perspective_coeffs(dst: list[tuple[float, float]], src: list[tuple[float, f
     return np.linalg.solve(np.array(rows, np.float64), np.array(rhs, np.float64)).tolist()
 
 
-def perspective(img: Image.Image, c: PerspectiveAug, rng: random.Random) -> Image.Image:
+def perspective(img: Image.Image, c: PerspectiveAug, rng: random.Random) -> Out:
     """Phone held at an angle, not parallel to the page: the form becomes a slight trapezoid."""
     w, h = img.size
     corners = [(0, 0), (w, 0), (w, h), (0, h)]
     dx, dy = c.max_shift * w, c.max_shift * h
     moved = [(x + rng.uniform(-dx, dx), y + rng.uniform(-dy, dy)) for x, y in corners]
-    return img.transform(img.size, Image.Transform.PERSPECTIVE, _perspective_coeffs(moved, corners),
-                         resample=Image.Resampling.BICUBIC, fillcolor=_edge_fill(img))
+    out = img.transform(img.size, Image.Transform.PERSPECTIVE, _perspective_coeffs(moved, corners),
+                        resample=Image.Resampling.BICUBIC, fillcolor=_edge_fill(img))
+    return out, {"corners": [[x, y] for x, y in moved]}
 
 
-def blur(img: Image.Image, c: BlurAug, rng: random.Random) -> Image.Image:
+def blur(img: Image.Image, c: BlurAug, rng: random.Random) -> Out:
     """Slight defocus or hand shake."""
-    return img.filter(ImageFilter.GaussianBlur(rng.uniform(*c.radius)))
+    radius = rng.uniform(*c.radius)
+    return img.filter(ImageFilter.GaussianBlur(radius)), {"radius": radius}
 
 
-def brightness_contrast(img: Image.Image, c: BrightnessContrastAug, rng: random.Random) -> Image.Image:
+def brightness_contrast(img: Image.Image, c: BrightnessContrastAug, rng: random.Random) -> Out:
     """Auto-exposure: the photo comes out washed out (low contrast) or a bit dark/bright."""
-    img = ImageEnhance.Contrast(img).enhance(rng.uniform(*c.contrast))
-    return ImageEnhance.Brightness(img).enhance(rng.uniform(*c.brightness))
+    contrast, brightness = rng.uniform(*c.contrast), rng.uniform(*c.brightness)
+    img = ImageEnhance.Contrast(img).enhance(contrast)
+    return ImageEnhance.Brightness(img).enhance(brightness), {"contrast": contrast, "brightness": brightness}
 
 
-def noise(img: Image.Image, c: NoiseAug, rng: random.Random) -> Image.Image:
+def noise(img: Image.Image, c: NoiseAug, rng: random.Random) -> Out:
     """Sensor noise from shooting in a dim room."""
     np_rng = np.random.default_rng(rng.getrandbits(32))
     arr = np.asarray(img, dtype=np.float32)
-    arr = arr + np_rng.normal(0, rng.uniform(*c.sigma), arr.shape).astype(np.float32)
-    return Image.fromarray(arr.clip(0, 255).astype(np.uint8))
+    sigma = rng.uniform(*c.sigma)
+    arr = arr + np_rng.normal(0, sigma, arr.shape).astype(np.float32)
+    return Image.fromarray(arr.clip(0, 255).astype(np.uint8)), {"sigma": sigma}
 
 
-def jpeg(img: Image.Image, c: JpegAug, rng: random.Random) -> Image.Image:
+def jpeg(img: Image.Image, c: JpegAug, rng: random.Random) -> Out:
     """Lossy compression when the phone saves the photo or a messaging app resends it (blocky edges)."""
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=rng.randint(*c.quality))
+    quality = rng.randint(*c.quality)
+    img.save(buf, format="JPEG", quality=quality)
     buf.seek(0)
-    return Image.open(buf).convert("RGB")
+    return Image.open(buf).convert("RGB"), {"quality": quality}
 
 
 STEPS: list[tuple[str, Callable]] = [
@@ -120,12 +130,11 @@ STEPS: list[tuple[str, Callable]] = [
 ]
 
 
-def apply_photo_defects(img: Image.Image, cfg: AugmentConfig, rng: random.Random) -> tuple[Image.Image, list[str]]:
-    """Apply each defect with its own probability. Returns the image and the names of the defects applied."""
-    applied = []
+def apply_photo_defects(img: Image.Image, cfg: AugmentConfig, rng: random.Random) -> Out:
+    """Apply each defect with its own probability. Returns the image and {defect: parameters} for those applied."""
+    applied = {}
     for name, fn in STEPS:
         step_cfg = getattr(cfg, name)
         if rng.random() < step_cfg.p:
-            img = fn(img, step_cfg, rng)
-            applied.append(name)
+            img, applied[name] = fn(img, step_cfg, rng)
     return img, applied
