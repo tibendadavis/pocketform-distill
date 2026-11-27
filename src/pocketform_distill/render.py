@@ -16,6 +16,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 from pocketform_distill.config import RGB, FormField
 
 CELL_GAP = 4  # px between cells in a comb box
+MARK_STYLES = ("fill", "scribble", "tick", "cross")
 
 
 @lru_cache(maxsize=64)
@@ -24,7 +25,7 @@ def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
 
 
 def cells(f: FormField) -> list[tuple[int, int, int, int]]:
-    """Boxes the writer fills: one per digit for comb integer fields, else the whole field box."""
+    """Boxes the writer fills: one per character for comb fields (`cells`), else the whole field box."""
     x, y, w, h = f.box
     if not f.cells:
         return [f.box]
@@ -58,6 +59,7 @@ class Writer:
     slant: float  # degrees; people lean consistently
     thick: bool  # heavier pen / more pressure
     jitter: float  # how untidy: scales random offsets and rotations
+    mark: str  # how this person marks an option circle: fill, scribble, tick or cross
 
     @classmethod
     def random(cls, fonts: list[Path], ink_colors: list[RGB], rng: random.Random) -> Writer:
@@ -70,6 +72,7 @@ class Writer:
             slant=rng.uniform(-6, 6),
             thick=rng.random() < 0.35,
             jitter=rng.uniform(0.5, 1.5),
+            mark=rng.choice(MARK_STYLES),
         )
 
     def _paste_glyphs(self, ink: Image.Image, text: str, font: ImageFont.FreeTypeFont, center: tuple[float, float],
@@ -91,8 +94,10 @@ class Writer:
         strength = rng.randint(200, 255)  # pen pressure for this field
         j = self.jitter
         if f.cells:
-            # Comb boxes: one digit per cell, right-aligned, as people fill tally boxes ("_ 2 1").
-            for (cx, cy, cw, ch), digit in zip(cells(f)[-len(text):], text):
+            # Comb boxes: one character per cell. Counts are right-aligned, as people fill tally boxes ("_ 2 1");
+            # codes start at the first cell.
+            boxes = cells(f)[-len(text):] if f.type == "integer" else cells(f)[:len(text)]
+            for (cx, cy, cw, ch), digit in zip(boxes, text):
                 font = _font_for_height(self.font, ch * self.size * rng.uniform(0.9, 1.1))
                 center = (cx + cw / 2 + rng.gauss(0, cw * 0.06 * j), cy + ch / 2 + rng.gauss(0, ch * 0.05 * j))
                 self._paste_glyphs(ink, digit, font, center, -self.slant + rng.gauss(0, 3 * j), strength)
@@ -105,6 +110,34 @@ class Writer:
         cx = x + w * 0.03 + rng.uniform(0, slack) * rng.uniform(0.1, 0.8) + font.getlength(text) / 2
         cy = y + h / 2 + rng.gauss(0, h * 0.05 * j)
         self._paste_glyphs(ink, text, font, (cx, cy), -self.slant * 0.4 + rng.gauss(0, 1 * j), strength)
+
+    def mark_option(self, ink: Image.Image, f: FormField, option: str, rng: random.Random) -> None:
+        """Mark `option` of a mark field in its printed circle, in this writer's style."""
+        x, y, w, h = f.option_boxes[f.options.index(option)]
+        strength = rng.randint(200, 255)
+        j = self.jitter
+        r = min(w, h) / 2
+        cx = x + w / 2 + rng.gauss(0, r * 0.12 * j)
+        cy = y + h / 2 + rng.gauss(0, r * 0.12 * j)
+        width = max(2, round(r * (0.3 if self.thick else 0.2)))
+        draw = ImageDraw.Draw(ink)
+        if self.mark == "fill":  # blacken the circle, a bit bigger or smaller than it
+            s = r * rng.uniform(0.65, 1.0)
+            draw.ellipse((cx - s, cy - s * rng.uniform(0.85, 1.1), cx + s, cy + s), fill=strength)
+        elif self.mark == "scribble":  # quick zigzag strokes over the circle
+            s = r * 0.8
+            pts = [(cx - s + 2 * s * (i % 2) + rng.gauss(0, r * 0.1), cy - s + i * 2 * s / 6 + rng.gauss(0, r * 0.08))
+                   for i in range(7)]
+            draw.line(pts, fill=strength, width=width, joint="curve")
+        elif self.mark == "tick":  # short down stroke, long up stroke; often overshoots the circle
+            s = r * rng.uniform(0.9, 1.4)
+            draw.line([(cx - s * 0.7, cy), (cx - s * 0.15, cy + s * 0.6), (cx + s * 0.9, cy - s * 0.9)],
+                      fill=strength, width=width, joint="curve")
+        else:  # cross
+            s = r * rng.uniform(0.8, 1.3)
+            for dx in (-1, 1):
+                draw.line([(cx - dx * s, cy - s + rng.gauss(0, r * 0.1)), (cx + dx * s, cy + s)], fill=strength,
+                          width=width)
 
     def apply(self, page: Image.Image, ink: Image.Image) -> Image.Image:
         """Composite the ink layer onto the page in this writer's pen colour."""
