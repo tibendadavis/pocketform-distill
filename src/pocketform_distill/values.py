@@ -20,7 +20,7 @@ _SYLLABLES = ["ka", "ki", "mu", "na", "ba", "lo", "re", "sa", "to", "wa", "ni", 
 
 def int_range(f: FormField) -> tuple[int, int]:
     lo = f.min if isinstance(f.min, int) else 0
-    hi = f.max if isinstance(f.max, int) else (10**f.digits - 1 if f.digits else DEFAULT_INT_MAX)
+    hi = f.max if isinstance(f.max, int) else (10**f.cells - 1 if f.cells else DEFAULT_INT_MAX)
     return lo, hi
 
 

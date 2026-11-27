@@ -15,7 +15,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from pocketform_distill.config import RGB, FormField
 
-CELL_GAP = 4  # px between digit cells in a comb box
+CELL_GAP = 4  # px between cells in a comb box
 
 
 @lru_cache(maxsize=64)
@@ -26,10 +26,10 @@ def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
 def cells(f: FormField) -> list[tuple[int, int, int, int]]:
     """Boxes the writer fills: one per digit for comb integer fields, else the whole field box."""
     x, y, w, h = f.box
-    if not f.digits:
+    if not f.cells:
         return [f.box]
-    cw = (w - CELL_GAP * (f.digits - 1)) / f.digits
-    return [(round(x + i * (cw + CELL_GAP)), y, round(cw), h) for i in range(f.digits)]
+    cw = (w - CELL_GAP * (f.cells - 1)) / f.cells
+    return [(round(x + i * (cw + CELL_GAP)), y, round(cw), h) for i in range(f.cells)]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -90,7 +90,7 @@ class Writer:
         """Write `text` into field `f` on the ink layer, with random size, offset and rotation inside the box."""
         strength = rng.randint(200, 255)  # pen pressure for this field
         j = self.jitter
-        if f.digits:
+        if f.cells:
             # Comb boxes: one digit per cell, right-aligned, as people fill tally boxes ("_ 2 1").
             for (cx, cy, cw, ch), digit in zip(cells(f)[-len(text):], text):
                 font = _font_for_height(self.font, ch * self.size * rng.uniform(0.9, 1.1))

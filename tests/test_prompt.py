@@ -55,7 +55,7 @@ def test_prompt_is_stable_when_boxes_are_re_picked(spec, section):
 def grid_spec() -> FormSpec:
     """Section s: a 2x2 tally grid (labels "<row>, <column>") plus one field on its own row. Section t: one field."""
     def f(fid, label, x, y):
-        return {"id": fid, "label": label, "type": "integer", "digits": 3, "box": [x, y, 90, 40]}
+        return {"id": fid, "label": label, "type": "integer", "cells": 3, "box": [x, y, 90, 40]}
 
     return FormSpec.model_validate({"name": "grid", "sections": [
         {"id": "s", "title": "Tally", "template_image": "template-s.png", "groups": [

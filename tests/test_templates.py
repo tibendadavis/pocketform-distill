@@ -45,7 +45,7 @@ def _form(**field) -> dict:
         {"type": "choice"},  # choice without options
         {"options": ["x"]},  # options on a non-choice field
         {"min": 5, "max": 1},
-        {"digits": 2, "max": 500},  # 500 does not fit in 2 cells
+        {"cells": 2, "max": 500},  # 500 does not fit in 2 cells
         {"box": [10, 10, 0, 20]},  # zero width
         {"type": "date", "min": 3},  # date range must be dates
         {"typo_key": 1},  # unknown keys fail instead of being ignored

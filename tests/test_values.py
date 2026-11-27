@@ -23,7 +23,7 @@ def test_integer_respects_min_max():
 
 
 def test_integer_defaults_fit_digit_cells():
-    vals = samples(field(type="integer", digits=2))
+    vals = samples(field(type="integer", cells=2))
     assert all(0 <= v <= 99 for v in vals)
 
 

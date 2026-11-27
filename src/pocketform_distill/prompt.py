@@ -33,7 +33,7 @@ def _date_pattern(fmt: str) -> str:
 
 def _describe(f: FormField) -> str:
     if f.type == "integer":
-        return f"whole number, up to {f.digits} digits, one digit per box" if f.digits else "whole number"
+        return f"whole number, up to {f.cells} digits, one digit per box" if f.cells else "whole number"
     if f.type == "date":
         return f"date, written {_date_pattern(f.format)}"
     if f.type == "choice":
@@ -113,7 +113,7 @@ def sectioned_prompt(spec: FormSpec, section: Section) -> str:
         lines.append(f"## {group.title or group.id}" + (f" [all: {shared}]" if shared else ""))
         for row in rows(group.fields):
             lines.append(_row_line(row, hint=shared is None))
-            side_by_side_combs |= sum(bool(f.digits) for f in row) > 1
+            side_by_side_combs |= sum(bool(f.cells) for f in row) > 1
     if side_by_side_combs:
         # Measured on qwen3.5:9b: without this, "4" in one comb next to "851" in the next was read as 4851.
         lines.append("Each field is its own group of boxes. Groups in a row sit side by side: read each group on "

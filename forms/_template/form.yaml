@@ -52,13 +52,13 @@ sections:
             label: Arrivals
             type: integer
             box: [230, 395, 105, 40]
-            digits: 3              # printed digit cells ("comb" box); one handwritten digit per cell
+            cells: 3               # printed cells ("comb" box); one handwritten digit per cell
             min: 0
             max: 500
           - id: departures_count
             label: Departures
             type: integer
             box: [230, 450, 105, 40]
-            digits: 3
+            cells: 3
             min: 0
             max: 500

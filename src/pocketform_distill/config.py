@@ -29,28 +29,65 @@ class Strict(BaseModel):
 class FormField(Strict):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str
-    type: Literal["text", "integer", "date", "choice"]
-    box: Box
-    # integer: optional range; digits = number of printed digit cells ("comb" boxes), one digit per cell.
-    # date: min/max are dates (YAML `2024-01-01`), format is how the writer writes it (truth is always ISO).
+    # text     handwritten words on a line or in a box
+    # integer  a count; with `cells`, one digit per printed cell, right-aligned
+    # code     an identifier of letters and/or digits (e.g. a facility code), copied exactly; leading zeros kept
+    # date     a date written in `format`; truth is ISO (YYYY-MM-DD)
+    # choice   one of `options`, written as a word
+    # mark     one of `options`, chosen by filling / ticking / crossing that option's printed circle or box
+    type: Literal["text", "integer", "code", "date", "choice", "mark"]
+    # The writing area in template pixels. For `mark` fields it can be left out: it is then the area around
+    # all `option_boxes`.
+    box: Box | None = None  # always set after validation
+    # integer / code: number of printed cells ("comb" box), one character per cell.
+    cells: int | None = Field(default=None, ge=1, le=16)
+    # integer: optional range. date: min/max are dates (YAML `2024-01-01`), format is how the writer writes it.
     min: int | date | None = None
     max: int | date | None = None
-    digits: int | None = Field(default=None, ge=1, le=12)
     format: str = "%d/%m/%Y"
-    options: list[str] | None = None  # choice
-    values: list[str] | None = None  # text: realistic values to sample from
+    # code: what synthetic codes look like, one character per position. A = letter, 9 = digit, * = letter or
+    # digit, anything else is printed as is (e.g. "AA-9999"). Default: "*" for every cell.
+    pattern: str | None = None
+    options: list[str] | None = None  # choice, mark
+    option_boxes: list[Box] | None = None  # mark: one box per option (same order), around its circle
+    values: list[str] | None = None  # text, code: realistic values to sample from instead of generating
 
     @model_validator(mode="after")
     def _check_type_specific(self) -> FormField:
-        if self.type == "choice" and not self.options:
-            raise ValueError(f"{self.id}: choice fields need `options`")
-        if self.type != "choice" and self.options:
-            raise ValueError(f"{self.id}: `options` only applies to choice fields")
-        if self.type != "text" and self.values:
-            raise ValueError(f"{self.id}: `values` only applies to text fields")
-        if self.digits is not None and self.type != "integer":
-            raise ValueError(f"{self.id}: `digits` only applies to integer fields")
-        want = {"integer": int, "date": date}.get(self.type)
+        t = self.type
+        if t in ("choice", "mark") and not self.options:
+            raise ValueError(f"{self.id}: {t} fields need `options`")
+        if t not in ("choice", "mark") and self.options:
+            raise ValueError(f"{self.id}: `options` only applies to choice and mark fields")
+        if t == "mark":
+            if not self.option_boxes or len(self.option_boxes) != len(self.options):
+                raise ValueError(f"{self.id}: mark fields need one `option_boxes` entry per option "
+                                 f"({len(self.options)})")
+            if any(b[2] <= 0 or b[3] <= 0 for b in self.option_boxes):
+                raise ValueError(f"{self.id}: option box width and height must be > 0")
+            if self.box is None:
+                x0 = min(b[0] for b in self.option_boxes)
+                y0 = min(b[1] for b in self.option_boxes)
+                x1 = max(b[0] + b[2] for b in self.option_boxes)
+                y1 = max(b[1] + b[3] for b in self.option_boxes)
+                self.box = (x0, y0, x1 - x0, y1 - y0)
+        elif self.option_boxes:
+            raise ValueError(f"{self.id}: `option_boxes` only applies to mark fields")
+        if self.box is None:
+            raise ValueError(f"{self.id}: `box` is required")
+        if t not in ("text", "code") and self.values:
+            raise ValueError(f"{self.id}: `values` only applies to text and code fields")
+        if self.cells is not None and t not in ("integer", "code"):
+            raise ValueError(f"{self.id}: `cells` only applies to integer and code fields")
+        if self.pattern is not None:
+            if t != "code":
+                raise ValueError(f"{self.id}: `pattern` only applies to code fields")
+            if self.cells and len(self.pattern) != self.cells:
+                raise ValueError(f"{self.id}: pattern {self.pattern!r} has {len(self.pattern)} characters but "
+                                 f"there are {self.cells} cells")
+        if t == "code" and self.cells and self.values and any(len(v) > self.cells for v in self.values):
+            raise ValueError(f"{self.id}: a value is longer than its {self.cells} cells")
+        want = {"integer": int, "date": date}.get(t)
         for name in ("min", "max"):
             v = getattr(self, name)
             if v is None:
@@ -59,8 +96,8 @@ class FormField(Strict):
                 raise ValueError(f"{self.id}: `{name}` must be {'a date' if want is date else 'an integer'}")
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError(f"{self.id}: min > max")
-        if self.type == "integer" and self.digits and self.max is not None and len(str(self.max)) > self.digits:
-            raise ValueError(f"{self.id}: max {self.max} does not fit in {self.digits} digit cells")
+        if t == "integer" and self.cells and self.max is not None and len(str(self.max)) > self.cells:
+            raise ValueError(f"{self.id}: max {self.max} does not fit in {self.cells} digit cells")
         if self.box[2] <= 0 or self.box[3] <= 0:
             raise ValueError(f"{self.id}: box width and height must be > 0")
         return self
@@ -169,9 +206,10 @@ def load_form(folder: str | Path) -> FormSpec:
             )
         w, h = section.open_template().size
         for f in section.fields:
-            x, y, bw, bh = f.box
-            if x < 0 or y < 0 or x + bw > w or y + bh > h:
-                raise ValueError(f"{f.id}: box {list(f.box)} is outside the {w}x{h} template of section {section.id}")
+            for x, y, bw, bh in [f.box, *(f.option_boxes or [])]:
+                if x < 0 or y < 0 or x + bw > w or y + bh > h:
+                    raise ValueError(f"{f.id}: box {[x, y, bw, bh]} is outside the {w}x{h} template of section "
+                                     f"{section.id}")
     return spec
 
 

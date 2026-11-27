@@ -124,7 +124,7 @@ def main() -> None:
         name, f = cur
         n = f"{len(done) + 1}/{len(fields)}  " if fields else ""
         title.config(text=f"{n}{name}" + (f"  -  {f.label}" if f else ""))
-        what = "comb box: outer corners of ALL digit cells" if f and f.digits else "the whole writing area"
+        what = "comb box: outer corners of ALL cells" if f and f.cells else "the whole writing area"
         step = "click its BOTTOM-RIGHT corner" if pending else "click its TOP-LEFT corner"
         keys = "Enter = keep orange box, " if f else ""
         hint.config(text=f"{step} ({what})   |   {keys}u = undo, s = skip, q = finish")
