@@ -10,6 +10,7 @@ import ollama
 from transformers import AutoTokenizer
 
 from pocketform_distill.config import load_form
+from pocketform_distill.preprocess import png_bytes, prepare_image
 from pocketform_distill.prompt import build_prompt, format_answer, parse_answer
 from pocketform_distill.token_mapping import to_student_id
 
@@ -23,6 +24,7 @@ def main() -> None:
     p.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
     p.add_argument("--section", help="section the photo shows (default: the form's only section)")
     p.add_argument("--show-prompt", action="store_true")
+    p.add_argument("--max-pixels", type=int, default=819200, help="image.max_pixels from the run config")
     args = p.parse_args()
     spec = load_form(args.form)
     section = spec.section(args.section)
@@ -33,7 +35,10 @@ def main() -> None:
     t0 = time.time()
     resp = ollama.chat(
         model=args.teacher,
-        messages=[{"role": "user", "content": prompt, "images": [args.image_path]}],
+        # Same preprocessing and settings as the teacher stage
+        messages=[{"role": "user", "content": prompt,
+                   "images": [png_bytes(prepare_image(args.image_path, args.max_pixels))]}],
+        format="json",
         think=False,
         logprobs=True,
         top_logprobs=args.top,
@@ -56,11 +61,11 @@ def main() -> None:
             for k in truth:
                 if got[k] != truth[k]:
                     print(f"  {k}: got {got[k]!r}, truth {truth[k]!r}")
-            # Shape check, independent of whether the values are right: the reply must be exactly what
-            # format_answer would write for those values, or its tokens won't line up with the target's.
+            # Shape check, independent of whether the values are right. Not required (the dataset stage lines up
+            # values field by field), but a one-line reply lines up at more positions.
             shape_ok = answer.strip() == format_answer(section, got)
             missing = [f.id for f in section.fields if f'"{f.id}":' not in answer]
-            print(f"Answer format exact: {'yes' if shape_ok else 'no'} (needed for token-level soft labels)"
+            print(f"Answer exactly the one-line target: {'yes' if shape_ok else 'no'}"
                   + (f"; keys missing from the reply: {missing}" if missing else "") + "\n")
         except ValueError as e:
             print(f"--- vs truth ---\nCould not parse the answer: {e}\n")

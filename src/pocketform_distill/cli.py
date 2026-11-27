@@ -31,6 +31,62 @@ def synth(
 
 
 @app.command()
+def teacher(
+    config: Annotated[Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Run config YAML")],
+    data_root: Annotated[Path, typer.Option("--data", help="Root folder for stage outputs")] = Path("data"),
+    limit: Annotated[int | None, typer.Option("--limit", "-n", help="Label at most N new photos (try it out)")] = None,
+    section: Annotated[str | None, typer.Option("--section", "-s", help="Only this section's photos")] = None,
+) -> None:
+    """Stage 2: the teacher reads every synth photo; saves its answers and probabilities. Resumable."""
+    import json
+    import time
+
+    from pocketform_distill.config import load_run_config
+    from pocketform_distill.teacher import run_teacher
+
+    cfg = load_run_config(config)
+    t0 = time.monotonic()
+    skipped_before: list[int] = []  # photos already labelled before the first new one (they took no time)
+
+    def progress(done: int, total: int, rec: dict) -> None:
+        if not skipped_before:
+            skipped_before.append(done - 1)
+        new = done - skipped_before[0]
+        left = (time.monotonic() - t0) / new * (total - done)
+        right = sum(rec["correct"].values())
+        typer.echo(f"[{done}/{total}] {rec['id']}: {right}/{len(rec['correct'])} fields right, "
+                   f"{rec['seconds']:.0f} s, ~{left / 60:.0f} min left")
+
+    out = run_teacher(cfg, data_root, limit=limit, section=section, progress=progress)
+    summary = json.loads((out / "run.json").read_text())["summary"]
+    for sid, s in summary["sections"].items():
+        typer.echo(f"section {sid}: {s['field_accuracy']:.1%} of {s['fields']} fields right "
+                   f"({s['photos']} photos, {s['one_line']} one-line replies)")
+    typer.echo(f"teacher field accuracy: {summary['field_accuracy']:.1%} -> {out}")
+
+
+@app.command()
+def dataset(
+    config: Annotated[Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Run config YAML")],
+    data_root: Annotated[Path, typer.Option("--data", help="Root folder for stage outputs")] = Path("data"),
+) -> None:
+    """Stage 3: training examples from synth truth (hard labels) + teacher probabilities (soft labels)."""
+    import json
+
+    from pocketform_distill.config import load_run_config
+    from pocketform_distill.dataset import run_dataset
+
+    out = run_dataset(load_run_config(config), data_root)
+    for sid, s in json.loads((out / "run.json").read_text())["sections"].items():
+        share = s["soft_share_of_value_positions"]
+        typer.echo(f"section {sid}: {s['photos']} photos ({s['with_teacher']} with teacher), teacher right on "
+                   f"{s['teacher_right']}/{s['fields']} fields, soft labels on "
+                   f"{'-' if share is None else f'{share:.0%}'} of value positions, "
+                   f"{s['target_tokens'] / s['photos']:.0f} answer tokens per photo")
+    typer.echo(f"-> {out}")
+
+
+@app.command()
 def prompt(
     config: Annotated[Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Run config YAML")],
     section: Annotated[str | None, typer.Option("--section", "-s", help="Section id (default: all sections)")] = None,
