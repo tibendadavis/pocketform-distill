@@ -40,8 +40,10 @@ def main() -> None:
     parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu"], default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
+    parser.add_argument("--section", help="section the photo shows (default: the form's only section)")
     args = parser.parse_args()
-    prompt = build_prompt(load_form(args.form))
+    spec = load_form(args.form)
+    prompt = build_prompt(spec, spec.section(args.section))
     image_path, model_id = args.image_path, args.model
     device = pick_device(args.device)
     dtype = pick_dtype(device)

@@ -1,7 +1,11 @@
-"""Mark where each field's box is on a blank template image, by clicking two corners.
+"""Mark where each field's box is on a section's blank template image, by clicking two corners.
 
-    uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form>           # print boxes
-    uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form> --write   # save into form.yaml
+    uv run python scripts/pick_boxes.py --form forms/<form> --section <id>           # print boxes
+    uv run python scripts/pick_boxes.py --form forms/<form> --section <id> --write   # save into form.yaml
+    uv run python scripts/pick_boxes.py some-image.png                              # any image: box_1, box_2, ...
+
+The window opens that section's template image (or pass an image path to use another one). --section can be left
+out when the form has only one section.
 
 What to click: the area the handwriting goes in for the field named in the bar at the bottom. Click its top-left
 corner, then its bottom-right corner. For a comb field (3 digit cells) take ALL the cells as one box: the
@@ -14,7 +18,6 @@ On screen:
 
 Keys: Enter = keep the orange box as it is, u = undo, s = skip, q / Esc = finish.
 Coordinates are in the image's own pixels, even though the window shows it scaled to fit the screen.
-Without --form you get box_1, box_2, ... for any image.
 """
 
 from __future__ import annotations
@@ -52,27 +55,37 @@ def main() -> None:
     from PIL import ImageTk
 
     p = argparse.ArgumentParser()
-    p.add_argument("image")
-    p.add_argument("--form", help="form folder: walk its fields in form.yaml order")
+    p.add_argument("image", nargs="?", help="image to click on (default: the section's template image)")
+    p.add_argument("--form", help="form folder: walk one section's fields in form.yaml order")
+    p.add_argument("--section", help="section id (default: the form's only section)")
     p.add_argument("--write", action="store_true", help="save the boxes into form.yaml (backup in form.yaml.bak)")
     p.add_argument("--max-size", type=int, default=1200, help="longest window side in screen pixels")
     args = p.parse_args()
     if args.write and not args.form:
         p.error("--write needs --form")
+    if not args.image and not args.form:
+        p.error("give an image, or --form (and --section) to use a section's template")
 
     # Read form.yaml without load_form's checks: the old boxes may not fit a new template, which is exactly when
     # you re-pick them.
     fields: list[FormField] = []
+    image = args.image
     if args.form:
-        fields = FormSpec.model_validate(yaml.safe_load((Path(args.form) / "form.yaml").read_text())).fields
+        spec = FormSpec.model_validate(yaml.safe_load((Path(args.form) / "form.yaml").read_text()))
+        try:
+            section = spec.section(args.section)
+        except ValueError as e:
+            p.error(str(e))
+        fields = section.fields
+        image = image or str(Path(args.form) / section.template_image)
 
-    with Image.open(args.image) as raw:
+    with Image.open(image) as raw:
         img = ImageOps.exif_transpose(raw).convert("RGB")  # same upright orientation synth uses
     scale = min(1.0, args.max_size / max(img.size))
     shown = img.resize((round(img.width * scale), round(img.height * scale)))
 
     root = tk.Tk()
-    root.title(f"pick_boxes - {args.image}")
+    root.title(f"pick_boxes - {image}")
     canvas = tk.Canvas(root, width=shown.width, height=shown.height, cursor="crosshair")
     canvas.pack()
     photo = ImageTk.PhotoImage(shown)

@@ -21,10 +21,12 @@ def main() -> None:
     p.add_argument("--student", default="Qwen/Qwen3.5-0.8B")
     p.add_argument("--top", type=int, default=20)
     p.add_argument("--form", default="forms/_template", help="form folder; the prompt is built from its spec")
+    p.add_argument("--section", help="section the photo shows (default: the form's only section)")
     p.add_argument("--show-prompt", action="store_true")
     args = p.parse_args()
     spec = load_form(args.form)
-    prompt = build_prompt(spec)
+    section = spec.section(args.section)
+    prompt = build_prompt(spec, section)
     if args.show_prompt:
         print(f"--- Prompt ---\n{prompt}\n")
 
@@ -48,7 +50,7 @@ def main() -> None:
         truth = json.loads(truth_path.read_text())
         answer = resp["message"]["content"]
         try:
-            got = parse_answer(spec, answer)
+            got = parse_answer(section, answer)
             right = sum(got[k] == truth[k] for k in truth)
             print(f"--- vs truth ({truth_path.name}) ---\n{right}/{len(truth)} fields correct")
             for k in truth:
@@ -56,8 +58,8 @@ def main() -> None:
                     print(f"  {k}: got {got[k]!r}, truth {truth[k]!r}")
             # Shape check, independent of whether the values are right: the reply must be exactly what
             # format_answer would write for those values, or its tokens won't line up with the target's.
-            shape_ok = answer.strip() == format_answer(spec, got)
-            missing = [f.id for f in spec.fields if f'"{f.id}":' not in answer]
+            shape_ok = answer.strip() == format_answer(section, got)
+            missing = [f.id for f in section.fields if f'"{f.id}":' not in answer]
             print(f"Answer format exact: {'yes' if shape_ok else 'no'} (needed for token-level soft labels)"
                   + (f"; keys missing from the reply: {missing}" if missing else "") + "\n")
         except ValueError as e:

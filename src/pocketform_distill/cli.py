@@ -26,21 +26,24 @@ def synth(
     cfg = load_run_config(config)
     out = run_synth(cfg, data_root)
     splits = Counter(json.loads(line)["split"] for line in (out / "manifest.jsonl").read_text().splitlines())
-    typer.echo(f"Wrote {cfg.synth.num_forms} forms to {out} ({dict(splits)})")
+    sections = len(cfg.load_form().sections)
+    typer.echo(f"Wrote {cfg.synth.num_photos} photos x {sections} section(s) to {out} ({dict(splits)})")
 
 
 @app.command()
 def prompt(
     config: Annotated[Path, typer.Option("--config", "-c", exists=True, dir_okay=False, help="Run config YAML")],
+    section: Annotated[str | None, typer.Option("--section", "-s", help="Section id (default: all sections)")] = None,
 ) -> None:
-    """Print the exact prompt every stage sends for this run's form, and its sha256."""
+    """Print the exact prompt every stage sends for each section of this run's form, and its sha256."""
     from pocketform_distill.config import load_run_config
     from pocketform_distill.prompt import build_prompt, prompt_info
 
     spec = load_run_config(config).load_form()
-    info = prompt_info(spec)
-    typer.echo(build_prompt(spec))
-    typer.echo(f"\n# kind={info['kind']} chars={info['chars']} sha256={info['sha256']}", err=True)
+    for s in [spec.section(section)] if section else spec.sections:
+        info = prompt_info(spec, s)
+        typer.echo(build_prompt(spec, s) + "\n")
+        typer.echo(f"# section={s.id} kind={info['kind']} chars={info['chars']} sha256={info['sha256']}\n", err=True)
 
 
 @app.command("version")
