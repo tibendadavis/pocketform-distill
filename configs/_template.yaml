@@ -16,7 +16,7 @@ student:
   method: lora
 
 synth:
-  num_photos: 300          # synthetic photos per section
+  num_photos: 100          # synthetic photos per section
   seed: 1234               # each photo's seed comes from this, its section id and its number
   empty_rate: 0.1          # chance each field is left blank (truth = null)
   val_fraction: 0.1        # exact share of each section's photos marked split=val
