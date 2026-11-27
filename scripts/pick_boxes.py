@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import argparse
 import tkinter as tk
+from pathlib import Path
 
-from PIL import Image, ImageTk
+import yaml
+from PIL import Image, ImageOps, ImageTk
 
-from pocketform_distill.config import load_form
+from pocketform_distill.config import FormSpec
 
 
 def main() -> None:
@@ -25,9 +27,13 @@ def main() -> None:
     p.add_argument("--max-size", type=int, default=1200, help="longest window side in screen pixels")
     args = p.parse_args()
 
-    names = [f.id for f in load_form(args.form).fields] if args.form else []
+    # Only the field ids are needed, so read form.yaml without load_form's box checks: the old boxes may not fit
+    # a new template image, which is exactly when you re-pick them.
+    names = [f.id for f in FormSpec.model_validate(yaml.safe_load((Path(args.form) / "form.yaml").read_text())).fields
+             ] if args.form else []
 
-    img = Image.open(args.image).convert("RGB")
+    with Image.open(args.image) as raw:
+        img = ImageOps.exif_transpose(raw).convert("RGB")  # same upright orientation synth uses
     scale = min(1.0, args.max_size / max(img.size))
     shown = img.resize((round(img.width * scale), round(img.height * scale)))
 
