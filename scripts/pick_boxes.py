@@ -9,7 +9,8 @@ out when the form has only one section.
 
 What to click: the area the handwriting goes in for the field named in the bar at the bottom. Click its top-left
 corner, then its bottom-right corner. For a comb field (3 digit cells) take ALL the cells as one box: the
-outer corners of the first and last cell. Synth splits it into cells itself.
+outer corners of the first and last cell. Synth splits it into cells itself. For a mark field (fill one circle)
+the bar walks through its options one by one: box each option's printed circle.
 
 On screen:
     orange dashed   where form.yaml currently says this field's box is (a hint; may be wrong)
@@ -35,16 +36,24 @@ from pocketform_distill.config import FormField, FormSpec
 Box = tuple[int, int, int, int]
 
 
-def write_boxes(form_yaml: Path, boxes: dict[str, Box]) -> None:
-    """Replace each field's `box: [...]` in form.yaml in place, keeping comments and layout (backup: .bak)."""
+def _fmt(box: Box) -> str:
+    return "[" + ", ".join(map(str, box)) + "]"
+
+
+def write_boxes(form_yaml: Path, boxes: dict[str, Box], option_boxes: dict[str, list[Box]] | None = None) -> None:
+    """Replace fields' `box: [...]` (and mark fields' `option_boxes: [[...], ...]`) in form.yaml in place, keeping
+    comments and layout (backup: .bak)."""
     text = form_yaml.read_text()
-    for fid, (x, y, w, h) in boxes.items():
-        # The first `box: [...]` after `id: <fid>` belongs to that field, in both `{id: a, box: [..]}` and
-        # block style.
-        pattern = re.compile(rf"(\bid:\s*{re.escape(fid)}\b.*?\bbox:\s*)\[[^\]]*\]", re.DOTALL)
-        text, n = pattern.subn(rf"\g<1>[{x}, {y}, {w}, {h}]", text, count=1)
+    # The first `box:` / `option_boxes:` after `id: <fid>` belongs to that field, in both `{id: a, box: [..]}`
+    # and block style. \b before box keeps `option_boxes:` from matching `box:`.
+    edits = [(fid, r"(?<![_\w])box", _fmt(b), r"\[[^\[\]]*\]") for fid, b in boxes.items()]
+    edits += [(fid, r"option_boxes", "[" + ", ".join(_fmt(b) for b in bs) + "]", r"\[(?:\s*\[[^\]]*\]\s*,?)*\s*\]")
+              for fid, bs in (option_boxes or {}).items()]
+    for fid, key, new, old in edits:
+        pattern = re.compile(rf"(\bid:\s*{re.escape(fid)}\b.*?{key}:\s*){old}", re.DOTALL)
+        text, n = pattern.subn(lambda m, new=new: m.group(1) + new, text, count=1)
         if n != 1:
-            raise SystemExit(f"could not find the box line for {fid} in {form_yaml}")
+            raise SystemExit(f"could not find the {key.split(')')[-1]} line for {fid} in {form_yaml}")
     shutil.copy(form_yaml, form_yaml.with_suffix(".yaml.bak"))
     form_yaml.write_text(text)
 
@@ -78,6 +87,14 @@ def main() -> None:
             p.error(str(e))
         fields = section.fields
         image = image or str(Path(args.form) / section.template_image)
+    # What to click, in order: one target per field, or per option for mark fields.
+    # (name shown, field, option index or None, current box as a hint)
+    targets: list[tuple[str, FormField, int | None, Box]] = []
+    for f in fields:
+        if f.type == "mark":
+            targets += [(f"{f.id}: {o}", f, k, f.option_boxes[k]) for k, o in enumerate(f.options)]
+        else:
+            targets.append((f.id, f, None, f.box))
 
     with Image.open(image) as raw:
         img = ImageOps.exif_transpose(raw).convert("RGB")  # same upright orientation synth uses
@@ -95,15 +112,15 @@ def main() -> None:
     hint = tk.Label(root, anchor="w", font=("Helvetica", 12))
     hint.pack(fill="x", padx=8, pady=(0, 6))
 
-    done: list[tuple[str, Box | None, int | None]] = []  # name, box (None = skipped), canvas item
+    done: list[tuple[str, Box | None, int | None]] = []  # name, box (None = skipped), canvas item (per target)
     pending: list[tuple[float, float]] = []
     temp: list[int] = []  # canvas items redrawn on every refresh (hint box, rubber band)
 
-    def current() -> tuple[str, FormField | None] | None:
+    def current() -> tuple[str, FormField | None, int | None, Box | None] | None:
         i = len(done)
         if fields:
-            return (fields[i].id, fields[i]) if i < len(fields) else None
-        return f"box_{i + 1}", None
+            return targets[i] if i < len(targets) else None
+        return f"box_{i + 1}", None, None, None
 
     def screen(box: Box) -> tuple[float, float, float, float]:
         x, y, w, h = box
@@ -121,15 +138,20 @@ def main() -> None:
             title.config(text="All fields done")
             hint.config(text="Press q to finish" + (" and save into form.yaml" if args.write else ""))
             return
-        name, f = cur
-        n = f"{len(done) + 1}/{len(fields)}  " if fields else ""
+        name, f, opt, hint_box = cur
+        n = f"{len(done) + 1}/{len(targets)}  " if fields else ""
         title.config(text=f"{n}{name}" + (f"  -  {f.label}" if f else ""))
-        what = "comb box: outer corners of ALL cells" if f and f.cells else "the whole writing area"
+        if f and opt is not None:
+            what = "the printed circle of this option"
+        elif f and f.cells:
+            what = "comb box: outer corners of ALL cells"
+        else:
+            what = "the whole writing area"
         step = "click its BOTTOM-RIGHT corner" if pending else "click its TOP-LEFT corner"
         keys = "Enter = keep orange box, " if f else ""
         hint.config(text=f"{step} ({what})   |   {keys}u = undo, s = skip, q = finish")
-        if f:
-            temp.append(canvas.create_rectangle(*screen(f.box), outline="orange", width=2, dash=(6, 4)))
+        if hint_box:
+            temp.append(canvas.create_rectangle(*screen(hint_box), outline="orange", width=2, dash=(6, 4)))
 
     def add(name: str, box: Box) -> None:
         item = canvas.create_rectangle(*screen(box), outline="green", width=2)
@@ -159,9 +181,9 @@ def main() -> None:
         if event.keysym in ("q", "Escape"):
             root.destroy()
             return
-        if event.keysym == "Return" and cur and cur[1] is not None:
+        if event.keysym == "Return" and cur and cur[3] is not None:
             pending.clear()
-            add(cur[0], cur[1].box)
+            add(cur[0], cur[3])
         elif event.keysym == "u" and done:
             pending.clear()
             name, _, item = done.pop()
@@ -180,13 +202,24 @@ def main() -> None:
     refresh()
     root.mainloop()
 
-    picked = {name: box for name, box, _ in done if box is not None}
     print("\n# --- final boxes ---")
     for name, box, _ in done:
-        print(f"- id: {name}\n  box: [{', '.join(map(str, box))}]" if box else f"# skipped: {name}")
-    if args.write and picked:
-        write_boxes(Path(args.form) / "form.yaml", picked)
-        print(f"# saved {len(picked)} boxes into {args.form}/form.yaml (previous version: form.yaml.bak)")
+        print(f"- {name}: {_fmt(box)}" if box else f"# skipped: {name}")
+    if not fields:
+        return
+    boxes: dict[str, Box] = {}
+    option_boxes: dict[str, list[Box]] = {}
+    for (_, f, opt, _), (_, box, _) in zip(targets, done):
+        if box is None:
+            continue
+        if opt is None:
+            boxes[f.id] = box
+        else:  # skipped options keep their current box
+            option_boxes.setdefault(f.id, list(f.option_boxes))[opt] = box
+    if args.write and (boxes or option_boxes):
+        write_boxes(Path(args.form) / "form.yaml", boxes, option_boxes)
+        print(f"# saved {len(done) - sum(b is None for _, b, _ in done)} boxes into {args.form}/form.yaml "
+              "(previous version: form.yaml.bak)")
 
 
 if __name__ == "__main__":
