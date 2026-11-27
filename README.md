@@ -128,8 +128,11 @@ uv run pocketform-distill prompt --config configs/_template.yaml
 the teacher's probabilities are "what comes next, given this prompt and image", and the student learns to match them
 under the same prompt.
 
-- **One builder per form `kind`.** `sectioned` lists each section's fields (id + label, with a type hint), then the
-  answer rules and a one-line example. Each form gets the same wording with its own fields. A new kind means a new
+- **One builder per form `kind`.** `sectioned` lists each section's fields row by row, left to right (fields whose
+  boxes sit side by side form a row; labels written `"<row>, <column>"` give the row and column names), then the
+  answer rules and a one-line example. When digit boxes sit side by side it adds one rule: never join digits
+  across neighbouring groups. That rule and the row layout raised the teacher from 85.6% to 90.6% of fields on 8
+  hard synthetic forms, with 94 fewer prompt tokens. Each form gets the same wording with its own fields. A new kind means a new
   `kind` value plus a builder in `prompt.BUILDERS`; a test fails if one is missing.
 - **The answer format lives next to it.** `format_answer` gives the exact target text: one line of JSON, keys in
   `form.yaml` order, `null` for empty. `parse_answer` reads a reply back. Without the example line, `qwen3.5:9b`
