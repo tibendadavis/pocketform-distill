@@ -23,13 +23,20 @@ def test_form_template_loads_with_unique_field_ids():
     assert ids
     assert len(ids) == len(set(ids))
     assert form.kind == "sectioned"
-    assert form.template_path.exists()  # the committed blank template.png
+    section = form.section()  # the template has one section, so no id is needed
+    assert section.id == "a" and [g.id for g in section.groups] == ["visit", "tally"]
+    assert section.template_path.exists()  # the committed blank template-a.png
     assert {f.type for f in form.fields} == {"text", "date", "choice", "integer"}
+
+
+def _section(sid: str = "s", fields: list[dict] | None = None, image: str = "template.png") -> dict:
+    return {"id": sid, "title": sid.upper(), "template_image": image,
+            "groups": [{"id": "g", "fields": fields or []}]}
 
 
 def _form(**field) -> dict:
     base = {"id": "a", "label": "A", "type": "integer", "box": [10, 10, 50, 20]}
-    return {"name": "t", "template_image": "template.png", "sections": [{"id": "s", "fields": [base | field]}]}
+    return {"name": "t", "sections": [_section(fields=[base | field])]}
 
 
 @pytest.mark.parametrize(
@@ -49,9 +56,9 @@ def test_bad_form_specs_are_rejected(bad):
         FormSpec.model_validate(_form(**bad))
 
 
-def test_template_image_is_required():
+def test_each_section_needs_a_template_image():
     spec = _form()
-    del spec["template_image"]
+    del spec["sections"][0]["template_image"]
     with pytest.raises(ValidationError, match="template_image"):
         FormSpec.model_validate(spec)
 
@@ -73,12 +80,31 @@ def test_missing_template_image_file_fails_with_a_hint(tmp_path):
 
 def test_box_outside_template_image_is_rejected(tmp_path):
     assert load_form(_write_form(tmp_path / "ok", [140, 70, 50, 20])).fields[0].box == (140, 70, 50, 20)
-    with pytest.raises(ValueError, match="outside the 200x100"):
+    with pytest.raises(ValueError, match="outside the 200x100 template of section s"):
         load_form(_write_form(tmp_path / "bad", [190, 10, 50, 20]))
 
 
-def test_duplicate_field_ids_are_rejected():
+def test_field_ids_are_unique_across_sections():
     spec = _form()
-    spec["sections"].append({"id": "s2", "fields": spec["sections"][0]["fields"]})
-    with pytest.raises(ValidationError, match="duplicate"):
+    spec["sections"].append(_section("s2", spec["sections"][0]["groups"][0]["fields"], "template-s2.png"))
+    with pytest.raises(ValidationError, match="duplicate field ids"):
         FormSpec.model_validate(spec)
+
+
+def test_section_ids_are_unique():
+    spec = _form()
+    spec["sections"].append(_section("s", [{"id": "b", "label": "B", "type": "integer", "box": [1, 1, 5, 5]}]))
+    with pytest.raises(ValidationError, match="duplicate section ids"):
+        FormSpec.model_validate(spec)
+
+
+def test_picking_a_section():
+    spec = _form()
+    spec["sections"].append(_section("s2", [{"id": "b", "label": "B", "type": "integer", "box": [1, 1, 5, 5]}]))
+    form = FormSpec.model_validate(spec)
+    assert form.section("s2").fields[0].id == "b"
+    assert [f.id for f in form.fields] == ["a", "b"]  # all sections
+    with pytest.raises(ValueError, match="several sections"):
+        form.section()
+    with pytest.raises(ValueError, match="no section 'x'"):
+        form.section("x")

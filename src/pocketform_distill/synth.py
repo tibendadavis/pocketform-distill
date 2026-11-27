@@ -1,11 +1,14 @@
-"""Stage 1: synth. Fake filled forms with known truth.
+"""Stage 1: synth. Fake filled-in section photos with known truth.
+
+A sectioned form is photographed one section at a time, so every synthetic image is one section, written on that
+section's blank template. `synth.num_photos` images are made per section.
 
 Writes to data/<run_name>/synth/:
-    {id}.png         the synthetic "phone photo"
-    {id}.json        truth keyed by field id, null = left empty
-    manifest.jsonl   one line per form: id, split (train/val), seed, plus the writer and photo defects drawn
-                     from that seed (for tracing bad images; regenerating only needs the seed)
-    run.json         config + git commit this ran with
+    {id}.png         the synthetic "phone photo" of one section; id = <section>-<n>, e.g. b-00042
+    {id}.json        truth for that section's fields, keyed by field id, null = left empty
+    manifest.jsonl   one line per photo: id, section, split (train/val), seed, plus the writer and photo defects
+                     drawn from that seed (for tracing bad images; regenerating only needs the seed)
+    run.json         config + git commit (+ template hashes) this ran with
 
 Never reads real forms (private/): they are the test set only.
 """
@@ -23,7 +26,7 @@ from typing import Any
 from PIL import Image
 
 from pocketform_distill.augment import apply_photo_defects
-from pocketform_distill.config import FormSpec, RunConfig, SynthConfig
+from pocketform_distill.config import RunConfig, Section, SynthConfig
 from pocketform_distill.provenance import write_run_info
 from pocketform_distill.render import Writer
 from pocketform_distill.values import sample_value, written_text
@@ -36,8 +39,8 @@ def list_fonts(fonts_dir: Path) -> list[Path]:
     return fonts
 
 
-def make_truth(spec: FormSpec, cfg: SynthConfig, rng: random.Random) -> dict[str, int | str | None]:
-    return {f.id: None if rng.random() < cfg.empty_rate else sample_value(f, rng) for f in spec.fields}
+def make_truth(section: Section, cfg: SynthConfig, rng: random.Random) -> dict[str, int | str | None]:
+    return {f.id: None if rng.random() < cfg.empty_rate else sample_value(f, rng) for f in section.fields}
 
 
 def _rounded(x: Any) -> Any:
@@ -50,17 +53,17 @@ def _rounded(x: Any) -> Any:
     return x
 
 
-def generate_form(spec: FormSpec, blank: Image.Image, cfg: SynthConfig, fonts: list[Path], seed: int
-                  ) -> tuple[Image.Image, dict[str, int | str | None], dict[str, Any]]:
-    """One synthetic form: sample values, handwrite them, then photograph it badly.
+def generate_photo(section: Section, blank: Image.Image, cfg: SynthConfig, fonts: list[Path], seed: int
+                   ) -> tuple[Image.Image, dict[str, int | str | None], dict[str, Any]]:
+    """One synthetic section photo: sample values, handwrite them, then photograph it badly.
 
     Returns the image, the truth, and what was drawn at random (writer + defects) for the manifest.
     """
     rng = random.Random(seed)
-    truth = make_truth(spec, cfg, rng)
+    truth = make_truth(section, cfg, rng)
     writer = Writer.random(fonts, cfg.ink_colors, rng)
     ink = Image.new("L", blank.size, 0)
-    for f in spec.fields:
+    for f in section.fields:
         if truth[f.id] is not None:
             writer.write(ink, f, written_text(f, truth[f.id]), rng)
     img, defects = apply_photo_defects(writer.apply(blank, ink), cfg.augment, rng)
@@ -69,7 +72,7 @@ def generate_form(spec: FormSpec, blank: Image.Image, cfg: SynthConfig, fonts: l
 
 
 def val_indices(n: int, val_fraction: float, seed: int) -> set[int]:
-    """Exactly round(n * val_fraction) forms go to val, picked by seed (not per form, so the count is exact)."""
+    """Exactly round(n * val_fraction) photos go to val, picked by seed (not per photo, so the count is exact)."""
     return set(random.Random(seed).sample(range(n), round(n * val_fraction)))
 
 
@@ -77,24 +80,27 @@ def run_synth(config: RunConfig, data_root: Path = Path("data")) -> Path:
     spec = config.load_form()
     cfg = config.synth
     fonts = list_fonts(cfg.fonts_dir)
-    blank = spec.open_template()
 
     out = data_root / config.run_name / "synth"
     if out.exists():
-        shutil.rmtree(out)  # this stage owns the folder; stale forms from a bigger earlier run must not linger
+        shutil.rmtree(out)  # this stage owns the folder; stale photos from a bigger earlier run must not linger
     out.mkdir(parents=True)
 
-    val = val_indices(cfg.num_forms, cfg.val_fraction, cfg.seed)
     manifest = []
-    for i in range(cfg.num_forms):
-        form_id = f"{i:05d}"
-        seed = cfg.seed + i
-        img, truth, drawn = generate_form(spec, blank, cfg, fonts, seed)
-        img.save(out / f"{form_id}.png")
-        (out / f"{form_id}.json").write_text(json.dumps(truth, indent=2) + "\n")
-        manifest.append({"id": form_id, "split": "val" if i in val else "train", "seed": seed, **drawn})
+    for k, section in enumerate(spec.sections):
+        blank = section.open_template()
+        val = val_indices(cfg.num_photos, cfg.val_fraction, cfg.seed + k)  # exact val share in every section
+        for i in range(cfg.num_photos):
+            photo_id = f"{section.id}-{i:05d}"
+            seed = cfg.seed + k * cfg.num_photos + i  # unique per photo across sections
+            img, truth, drawn = generate_photo(section, blank, cfg, fonts, seed)
+            img.save(out / f"{photo_id}.png")
+            (out / f"{photo_id}.json").write_text(json.dumps(truth, indent=2) + "\n")
+            split = "val" if i in val else "train"
+            manifest.append({"id": photo_id, "section": section.id, "split": split, "seed": seed, **drawn})
 
     (out / "manifest.jsonl").write_text("".join(json.dumps(m) + "\n" for m in manifest))
+    templates = {s.id: hashlib.sha256(s.template_path.read_bytes()).hexdigest() for s in spec.sections}
     write_run_info(out, "synth", config, form=spec.model_dump(mode="json"), fonts=[f.name for f in fonts],
-                   template_sha256=hashlib.sha256(spec.template_path.read_bytes()).hexdigest())
+                   template_sha256=templates)
     return out

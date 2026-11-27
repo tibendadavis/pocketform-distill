@@ -1,17 +1,17 @@
 """The one prompt, and the answer format that goes with it.
 
 Every stage that talks to a model (teacher, dataset, train, eval, export, the phone) gets its prompt from
-``build_prompt(spec)``. Distillation only works if they all see the same text: the teacher's probabilities are
+``build_prompt(spec, section)``: one prompt per photo, and for a sectioned form a photo is one section. Distillation only works if they all see the same text: the teacher's probabilities are
 "what comes next given this exact prompt and image", and the student is trained to match them under the same prompt.
 
-One builder per form ``kind``. The builder turns a form spec into the prompt text, so each form gets the same
-wording with its own field list. A new kind = a new ``kind`` value in config.FormSpec plus a builder registered in
+One builder per form ``kind``. The builder turns a form spec and one section into the prompt text, so every
+section of every form of that kind gets the same wording with its own field list. A new kind = a new ``kind`` value in config.FormSpec plus a builder registered in
 ``BUILDERS`` (a test fails if a kind has no builder).
 
 The answer format is defined here too because it is part of the same contract: ``format_answer`` produces the exact
 target text the student learns (and the teacher is asked for), ``parse_answer`` reads a model's reply back.
 
-Every stage records ``prompt_info(spec)`` in its run.json. If the sha256 differs between stages, they did not
+Every stage records ``prompt_info(spec, section)`` for each section in its run.json. If the sha256 differs between stages, they did not
 use the same prompt and their outputs must not be mixed.
 """
 
@@ -23,7 +23,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pocketform_distill.config import FormField, FormSpec
+from pocketform_distill.config import FormField, FormSpec, Section
 
 
 def _date_pattern(fmt: str) -> str:
@@ -54,10 +54,10 @@ def _example_value(f: FormField, i: int) -> Any:
     return f.values[0] if f.values else "Example"
 
 
-def _example(spec: FormSpec) -> str:
+def _example(section: Section) -> str:
     """One line in the exact answer format. Without it the teacher answers in fenced, pretty-printed JSON, whose
     tokens don't line up with the one-line target the student learns (checked on qwen3.5:9b)."""
-    first = spec.fields[:3]
+    first = section.fields[:3]
     return json.dumps({f.id: _example_value(f, i) for i, f in enumerate(first)}, ensure_ascii=False)
 
 
@@ -92,23 +92,26 @@ def _row_line(row: list[FormField], hint: bool) -> str:
     return "- row: " + " | ".join(f"{f.id} ({f.label}){h(f)}" for f in row)
 
 
-def sectioned_prompt(spec: FormSpec) -> str:
-    """Prompt for a form made of titled sections of fields.
+def sectioned_prompt(spec: FormSpec, section: Section) -> str:
+    """Prompt for one section of a sectioned form (one photo = one section, inside its corner markers).
 
     Kept short on purpose: the phone pays for every prompt token on every photo. A type hint shared by a whole
-    section is stated once on its heading, fields side by side are listed as one row (left to right, which also
-    tells the model where each value is), and only the answer rules for types the form has are included.
+    group is stated once on its heading, fields side by side are listed as one row (left to right, which also
+    tells the model where each value is), and only the answer rules for types the section has are included.
     """
-    head = f'This is a phone photo of a paper form: "{spec.name}"'
-    lines = [head + (f" ({spec.description})." if spec.description else "."),
-             "Read the handwritten value of every field listed below.", "",
-             "Fields, by section and row (left to right):"]
+    form = f'"{spec.name}"' + (f" ({spec.description})" if spec.description else "")
+    title = f'"{section.title}"' + (f" ({section.code})" if section.code else "")
+    lines = [f"This is a phone photo of section {section.id.upper()} of the paper form {form}: {title}."]
+    if section.description:
+        lines.append(section.description.rstrip(".") + ".")
+    lines += ["Read the handwritten value of every field listed below.", "",
+              "Fields, by group and row (left to right):"]
     side_by_side_combs = False
-    for section in spec.sections:
-        hints = {_describe(f) for f in section.fields}
+    for group in section.groups:
+        hints = {_describe(f) for f in group.fields}
         shared = hints.pop() if len(hints) == 1 else None
-        lines.append(f"## {section.title or section.id}" + (f" [all: {shared}]" if shared else ""))
-        for row in rows(section.fields):
+        lines.append(f"## {group.title or group.id}" + (f" [all: {shared}]" if shared else ""))
+        for row in rows(group.fields):
             lines.append(_row_line(row, hint=shared is None))
             side_by_side_combs |= sum(bool(f.digits) for f in row) > 1
     if side_by_side_combs:
@@ -116,7 +119,7 @@ def sectioned_prompt(spec: FormSpec) -> str:
         lines.append("Each field is its own group of boxes. Groups in a row sit side by side: read each group on "
                      "its own and never join digits from neighbouring groups.")
 
-    types = {f.type for f in spec.fields}
+    types = {f.type for f in section.fields}
     rules = [
         ("integer", "- numbers as JSON numbers, e.g. 21"),
         ("date", '- dates as "YYYY-MM-DD"'),
@@ -126,36 +129,37 @@ def sectioned_prompt(spec: FormSpec) -> str:
     lines += ["", "Answer with one line of JSON: an object with exactly these keys, in this order."]
     lines += [rule for t, rule in rules if t in types]
     lines += ["- a field left empty: null",
-              f"Example of the shape (values made up, real answers have all keys): {_example(spec)}",
+              f"Example of the shape (values made up, real answers have all keys): {_example(section)}",
               "If a value is hard to read, give your best reading. No other text, no code fences."]
     return "\n".join(lines)
 
 
-BUILDERS: dict[str, Callable[[FormSpec], str]] = {
+BUILDERS: dict[str, Callable[[FormSpec, Section], str]] = {
     "sectioned": sectioned_prompt,
 }
 
 
-def build_prompt(spec: FormSpec) -> str:
-    return BUILDERS[spec.kind](spec)
+def build_prompt(spec: FormSpec, section: Section) -> str:
+    return BUILDERS[spec.kind](spec, section)
 
 
-def prompt_info(spec: FormSpec) -> dict[str, str | int]:
+def prompt_info(spec: FormSpec, section: Section) -> dict[str, str | int]:
     """What a stage records in run.json so later stages can check they use the same prompt."""
-    text = build_prompt(spec)
-    return {"kind": spec.kind, "sha256": hashlib.sha256(text.encode()).hexdigest(), "chars": len(text)}
+    text = build_prompt(spec, section)
+    return {"kind": spec.kind, "section": section.id, "sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "chars": len(text)}
 
 
-def format_answer(spec: FormSpec, truth: dict[str, Any]) -> str:
-    """The exact target text for a form: one-line JSON, keys in form.yaml order, null for empty."""
-    return json.dumps({f.id: truth.get(f.id) for f in spec.fields}, ensure_ascii=False)
+def format_answer(section: Section, truth: dict[str, Any]) -> str:
+    """The exact target text for one section photo: one-line JSON, keys in form.yaml order, null for empty."""
+    return json.dumps({f.id: truth.get(f.id) for f in section.fields}, ensure_ascii=False)
 
 
 _FENCE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
 
 
-def parse_answer(spec: FormSpec, text: str) -> dict[str, Any]:
-    """A model's reply -> {field id: value}. Tolerates code fences and surrounding text.
+def parse_answer(section: Section, text: str) -> dict[str, Any]:
+    """A model's reply about one section photo -> {field id: value}. Tolerates code fences and surrounding text.
 
     Missing keys become None and unknown keys are dropped, so callers always get every field id. Raises
     ValueError if there is no JSON object at all.
@@ -165,4 +169,4 @@ def parse_answer(spec: FormSpec, text: str) -> dict[str, Any]:
     if start < 0 or end < start:
         raise ValueError("no JSON object in the answer")
     data = json.loads(text[start:end + 1])  # text from "{" to "}" can only decode to an object
-    return {f.id: data.get(f.id) for f in spec.fields}
+    return {f.id: data.get(f.id) for f in section.fields}

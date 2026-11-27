@@ -66,42 +66,37 @@ class FormField(Strict):
         return self
 
 
-class Section(Strict):
-    """A titled block of fields. Most paper forms are a stack of these (A. Visit, B. Screening, ...)."""
+class Group(Strict):
+    """Related fields inside a section, under one printed heading (e.g. "MUAC", "Bilateral oedema")."""
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     title: str | None = None
     fields: list[FormField]
 
 
-class FormSpec(Strict):
-    name: str
-    # Layout family. Only "sectioned" exists today; other families (e.g. a register with repeated rows) can be
-    # added later without changing what downstream stages see: they only use `fields`.
-    kind: Literal["sectioned"] = "sectioned"
-    description: str = ""
-    version: str | None = None
-    # Required: a flat, straight-on image of the BLANK form next to form.yaml (scan or export of the print file).
-    # Synth writes handwriting onto it and then adds the photo defects itself. Boxes are in its pixels.
-    template_image: str
-    sections: list[Section]
-    dhis2: dict[str, Any] | None = None  # mapping used by the export stage later
+class Section(Strict):
+    """One part of a sectioned form: the area inside its three printed corner markers.
 
-    folder: Path | None = Field(default=None, exclude=True)  # set by load_form, not read from YAML
+    A section is what the user photographs and what the pipeline processes as one unit: synth makes images of
+    one section, the prompt asks for one section's fields, and the phone reads one section per photo. Smaller
+    photos mean fewer image tokens and fewer fields to confuse.
+    """
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    title: str
+    code: str | None = None  # printed section code, e.g. NUTR-B
+    description: str = ""
+    # Required: a flat, straight-on image of this section of the BLANK form, cropped to its corner markers (export
+    # of the print file, or a scanner-app shot). Synth writes handwriting onto it, then adds photo defects.
+    # Boxes are in its pixels.
+    template_image: str
+    groups: list[Group]
+
+    folder: Path | None = Field(default=None, exclude=True)  # the form folder, set by load_form
 
     @property
     def fields(self) -> list[FormField]:
-        return [f for s in self.sections for f in s.fields]
-
-    @model_validator(mode="after")
-    def _check_ids(self) -> FormSpec:
-        ids = [f.id for f in self.fields]
-        if not ids:
-            raise ValueError("form has no fields")
-        dupes = sorted({i for i in ids if ids.count(i) > 1})
-        if dupes:
-            raise ValueError(f"duplicate field ids: {dupes}")
-        return self
+        return [f for g in self.groups for f in g.fields]
 
     @property
     def template_path(self) -> Path:
@@ -113,21 +108,70 @@ class FormSpec(Strict):
             return ImageOps.exif_transpose(img).convert("RGB")
 
 
+class FormSpec(Strict):
+    """A whole paper form. Its `kind` says how it is photographed and laid out.
+
+    Only "sectioned" exists today: several sections printed on one page, each marked by three corner squares,
+    photographed and read one section at a time. A later kind (e.g. one photo of a whole single-layout form) gets
+    its own spec shape and prompt builder.
+    """
+
+    name: str
+    kind: Literal["sectioned"] = "sectioned"
+    description: str = ""
+    version: str | None = None
+    sections: list[Section]
+    dhis2: dict[str, Any] | None = None  # mapping used by the export stage later
+
+    @property
+    def fields(self) -> list[FormField]:
+        """Every field on the form, all sections."""
+        return [f for s in self.sections for f in s.fields]
+
+    def section(self, section_id: str | None = None) -> Section:
+        """A section by id. With no id, the only section (an error if the form has several)."""
+        if section_id is None:
+            if len(self.sections) != 1:
+                raise ValueError(f"{self.name} has several sections; pick one of {[s.id for s in self.sections]}")
+            return self.sections[0]
+        for s in self.sections:
+            if s.id == section_id:
+                return s
+        raise ValueError(f"no section {section_id!r} in {self.name}; sections: {[s.id for s in self.sections]}")
+
+    @model_validator(mode="after")
+    def _check_ids(self) -> FormSpec:
+        section_ids = [s.id for s in self.sections]
+        if not section_ids:
+            raise ValueError("form has no sections")
+        if len(set(section_ids)) != len(section_ids):
+            raise ValueError(f"duplicate section ids: {section_ids}")
+        # Field ids are unique across the whole form, so exported values never collide between sections.
+        ids = [f.id for f in self.fields]
+        if not all(s.fields for s in self.sections):
+            raise ValueError("every section needs at least one field")
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"duplicate field ids: {dupes}")
+        return self
+
+
 def load_form(folder: str | Path) -> FormSpec:
-    """Load and validate a form folder: form.yaml plus its template image, with every box inside the image."""
+    """Load and validate a form folder: form.yaml plus one template image per section, every box inside it."""
     folder = Path(folder)
     spec = FormSpec.model_validate(yaml.safe_load((folder / "form.yaml").read_text()))
-    spec.folder = folder
-    if not spec.template_path.exists():
-        raise FileNotFoundError(
-            f"{spec.template_path} not found. Every form needs a blank template image: scan or export the empty "
-            "form, save it there, then get the boxes with scripts/pick_boxes.py."
-        )
-    w, h = spec.open_template().size
-    for f in spec.fields:
-        x, y, bw, bh = f.box
-        if x < 0 or y < 0 or x + bw > w or y + bh > h:
-            raise ValueError(f"{f.id}: box {list(f.box)} is outside the {w}x{h} template image")
+    for section in spec.sections:
+        section.folder = folder
+        if not section.template_path.exists():
+            raise FileNotFoundError(
+                f"{section.template_path} not found. Every section needs a blank template image: scan or export "
+                "the empty section, save it there, then get the boxes with scripts/pick_boxes.py."
+            )
+        w, h = section.open_template().size
+        for f in section.fields:
+            x, y, bw, bh = f.box
+            if x < 0 or y < 0 or x + bw > w or y + bh > h:
+                raise ValueError(f"{f.id}: box {list(f.box)} is outside the {w}x{h} template of section {section.id}")
     return spec
 
 
@@ -202,7 +246,7 @@ class AugmentConfig(Strict):
 
 
 class SynthConfig(Strict):
-    num_forms: int = Field(gt=0)
+    num_photos: int = Field(gt=0)  # synthetic photos per section
     seed: int = 0
     empty_rate: float = Field(default=0.1, ge=0, le=1)  # chance each field is left blank (truth = null)
     val_fraction: float = Field(default=0.1, ge=0, lt=1)

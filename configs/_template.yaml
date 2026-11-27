@@ -16,10 +16,10 @@ student:
   method: lora
 
 synth:
-  num_forms: 500
-  seed: 1234               # form i uses seed + i, so the same config gives byte-identical output
+  num_photos: 500          # synthetic photos per section
+  seed: 1234               # photo n uses seed + n (n counts across sections): same config, same bytes
   empty_rate: 0.1          # chance each field is left blank (truth = null)
-  val_fraction: 0.1        # exact share of forms marked split=val in manifest.jsonl
+  val_fraction: 0.1        # exact share of each section's photos marked split=val
   fonts_dir: assets/fonts/handwriting
   ink_colors:              # ballpoint black, blue, grey (each form picks one, jittered)
     - [20, 20, 28]

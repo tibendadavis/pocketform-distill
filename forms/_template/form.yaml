@@ -1,54 +1,64 @@
-# Form spec template: a fictional two-section intake and tally sheet.
-# Copy this folder to forms/<your-form>/, replace template.png with your blank form, and edit.
+# Form spec template: a fictional sectioned form (only section A is described here).
+# Copy this folder to forms/<your-form>/, replace the template images with your blank sections, and edit.
+#
+# Terms:
+#   form     the whole paper form. `kind` says how it is laid out and photographed.
+#   section  (kind: sectioned) one part of the page, marked by three printed corner squares. The user photographs
+#            one section at a time, and every stage works on one section photo at a time.
+#   group    related fields inside a section, under one printed heading.
 name: _template
-kind: sectioned            # layout family. Only "sectioned" exists today: a stack of titled sections of fields
-description: Fictional paper intake and tally sheet
+kind: sectioned
+description: Fictional intake and tally form
 version: "1.0"
 
-# Required: a flat, straight-on image of the EMPTY form next to this file (only template.png is committed).
-# Best: export the form's print file (PDF -> PNG). Otherwise a scanner app shot of an unfilled copy.
-# Synth writes handwriting onto it and adds the phone-photo defects itself, so it should be clean.
-# Boxes below are pixels in this image; get them with:
-#   uv run python scripts/pick_boxes.py forms/<form>/template.png --form forms/<form>
-template_image: template.png
-
 sections:
-  - id: visit
-    title: A  Visit
-    fields:
-      # box: [x, y, w, h]. type: text | integer | date | choice
-      - id: site_name
-        label: Site
-        type: text
-        box: [230, 165, 400, 40]
-        values: [North Clinic, River Post, Hill Camp, East Market, Lake Station]  # optional; random words if absent
-      - id: visit_date
-        label: Date
-        type: date
-        box: [230, 220, 220, 40]
-        min: 2024-01-01        # optional date range for synthetic values
-        max: 2026-12-31
-        format: "%d/%m/%Y"     # how people write it; truth is always ISO (YYYY-MM-DD)
-      - id: shift
-        label: Shift
-        type: choice
-        box: [230, 275, 220, 40]
-        options: [morning, afternoon, evening]
+  - id: a                    # photo ids and the prompt use this: a-00000.png, "section A"
+    title: Fictional intake & tally sheet
+    code: DEMO-1             # printed section code, if the section has one
+    # Required: a flat, straight-on image of this section of the EMPTY form, cropped to its corner markers.
+    # Best: export the form's print file (PDF -> PNG). Otherwise a scanner-app shot of an unfilled copy.
+    # Synth writes handwriting onto it and adds the phone-photo defects itself, so it should be clean.
+    # Name it template-<section id>.png (only those are committed). Boxes below are pixels in this image:
+    #   uv run python scripts/pick_boxes.py --form forms/<form> --section <id> --write
+    template_image: template-a.png
+    groups:
+      - id: visit
+        title: A  Visit
+        fields:
+          # box: [x, y, w, h]. type: text | integer | date | choice
+          - id: site_name
+            label: Site
+            type: text
+            box: [230, 165, 400, 40]
+            values: [North Clinic, River Post, Hill Camp, East Market, Lake Station]  # optional; random words if absent
+          - id: visit_date
+            label: Date
+            type: date
+            box: [230, 220, 220, 40]
+            min: 2024-01-01        # optional date range for synthetic values
+            max: 2026-12-31
+            format: "%d/%m/%Y"     # how people write it; truth is always ISO (YYYY-MM-DD)
+          - id: shift
+            label: Shift
+            type: choice
+            box: [230, 275, 220, 40]
+            options: [morning, afternoon, evening]
 
-  - id: tally
-    title: B  Tally
-    fields:
-      - id: arrivals_count
-        label: Arrivals
-        type: integer
-        box: [230, 395, 105, 40]
-        digits: 3              # printed digit cells ("comb" box); one handwritten digit per cell
-        min: 0
-        max: 500
-      - id: departures_count
-        label: Departures
-        type: integer
-        box: [230, 450, 105, 40]
-        digits: 3
-        min: 0
-        max: 500
+      - id: tally
+        title: B  Tally
+        fields:
+          # In a grid, write labels as "<row>, <column>": the prompt lists side-by-side fields as one row.
+          - id: arrivals_count
+            label: Arrivals
+            type: integer
+            box: [230, 395, 105, 40]
+            digits: 3              # printed digit cells ("comb" box); one handwritten digit per cell
+            min: 0
+            max: 500
+          - id: departures_count
+            label: Departures
+            type: integer
+            box: [230, 450, 105, 40]
+            digits: 3
+            min: 0
+            max: 500
