@@ -11,7 +11,7 @@ from PIL import Image
 
 from pocketform_distill.augment import STEPS
 from pocketform_distill.config import AugmentConfig, RunConfig, load_run_config
-from pocketform_distill.synth import generate_photo, list_fonts, make_truth, run_synth, val_indices
+from pocketform_distill.synth import generate_photo, list_fonts, make_truth, photo_seed, run_synth, val_indices
 
 ROOT = Path(__file__).resolve().parent.parent
 NO_AUG = AugmentConfig(**{k: {"p": 0.0} for k in AugmentConfig.model_fields})
@@ -60,7 +60,7 @@ def test_writes_expected_files(tmp_path):
     lines = manifest(out)
     assert [m["id"] for m in lines] == ["a-00000", "a-00001", "a-00002", "a-00003"]
     assert {m["section"] for m in lines} == {"a"}
-    assert [m["seed"] for m in lines] == [cfg.synth.seed + i for i in range(4)]
+    assert [m["seed"] for m in lines] == [photo_seed(cfg.synth.seed, "a", i) for i in range(4)]
     field_ids = [f.id for f in cfg.load_form().section("a").fields]
     for m in lines:
         assert list(json.loads((out / f"{m['id']}.json").read_text())) == field_ids

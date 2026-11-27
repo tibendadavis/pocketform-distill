@@ -71,6 +71,17 @@ def generate_photo(section: Section, blank: Image.Image, cfg: SynthConfig, fonts
     return img, truth, _rounded({"writer": writer_info, "defects": defects})
 
 
+def photo_seed(base_seed: int, section_id: str, n: int | str) -> int:
+    """Seed for photo n of a section, from the base seed, the section id and n only.
+
+    Hashing (instead of base + position * count + n) means adding, removing or reordering sections, or raising
+    num_photos, never changes a photo that already exists, so its teacher outputs stay valid. A 64-bit number
+    from sha256: different inputs effectively never collide.
+    """
+    digest = hashlib.sha256(f"{base_seed}:{section_id}:{n}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
 def val_indices(n: int, val_fraction: float, seed: int) -> set[int]:
     """Exactly round(n * val_fraction) photos go to val, picked by seed (not per photo, so the count is exact)."""
     return set(random.Random(seed).sample(range(n), round(n * val_fraction)))
@@ -87,12 +98,12 @@ def run_synth(config: RunConfig, data_root: Path = Path("data")) -> Path:
     out.mkdir(parents=True)
 
     manifest = []
-    for k, section in enumerate(spec.sections):
+    for section in spec.sections:
         blank = section.open_template()
-        val = val_indices(cfg.num_photos, cfg.val_fraction, cfg.seed + k)  # exact val share in every section
+        val = val_indices(cfg.num_photos, cfg.val_fraction, photo_seed(cfg.seed, section.id, "val"))
         for i in range(cfg.num_photos):
             photo_id = f"{section.id}-{i:05d}"
-            seed = cfg.seed + k * cfg.num_photos + i  # unique per photo across sections
+            seed = photo_seed(cfg.seed, section.id, i)
             img, truth, drawn = generate_photo(section, blank, cfg, fonts, seed)
             img.save(out / f"{photo_id}.png")
             (out / f"{photo_id}.json").write_text(json.dumps(truth, indent=2) + "\n")
