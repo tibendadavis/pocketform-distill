@@ -17,12 +17,48 @@ student:
 
 synth:
   num_forms: 500
+  seed: 1234               # form i uses seed + i, so the same config gives byte-identical output
+  empty_rate: 0.1          # chance each field is left blank (truth = null)
+  val_fraction: 0.1        # exact share of forms marked split=val in manifest.jsonl
+  fonts_dir: assets/fonts/handwriting
+  ink_colors:              # ballpoint black, blue, grey (each form picks one, jittered)
+    - [20, 20, 28]
+    - [28, 40, 110]
+    - [55, 55, 60]
+  # Phone-photo defects, applied in this order. p = probability per form.
+  augment:
+    paper_tint:            # warm indoor light / white balance: white paper looks pink, cream or grey
+      p: 0.9
+      colors: [[232, 182, 156], [240, 205, 180], [236, 226, 210], [226, 226, 222]]
+      jitter: 8
+    shading:               # uneven light: lamp falloff, shadow of the phone or hand
+      p: 0.7
+      strength: [0.05, 0.25]
+    rotate:                # page not square to the frame
+      p: 0.8
+      max_deg: 3
+    perspective:           # phone held at an angle: the page becomes a slight trapezoid
+      p: 0.7
+      max_shift: 0.04
+    blur:                  # slight defocus or hand shake
+      p: 0.6
+      radius: [0.3, 1.2]
+    brightness_contrast:   # auto-exposure: washed out, a bit dark or bright
+      p: 0.8
+      brightness: [0.85, 1.1]
+      contrast: [0.5, 1.0]
+    noise:                 # sensor noise in a dim room
+      p: 0.5
+      sigma: [1, 6]
+    jpeg:                  # compression when saved or resent by a messaging app
+      p: 1.0
+      quality: [50, 90]
 
 train:
   soft_label_weight: 0.5
 
 targets:
-  field_accuracy: 0.80
+  field_accuracy: 0.90
 
 export:
   format: json
