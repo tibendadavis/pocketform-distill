@@ -49,6 +49,13 @@ def _form(**field) -> dict:
         {"box": [10, 10, 0, 20]},  # zero width
         {"type": "date", "min": 3},  # date range must be dates
         {"typo_key": 1},  # unknown keys fail instead of being ignored
+        {"type": "mark", "options": ["x", "y"]},  # mark without option_boxes
+        {"type": "mark", "options": ["x", "y"], "option_boxes": [[1, 1, 5, 5]]},  # one box per option
+        {"option_boxes": [[1, 1, 5, 5]]},  # option_boxes on a non-mark field
+        {"type": "code", "cells": 4, "pattern": "AA99X"},  # pattern longer than the cells
+        {"type": "code", "cells": 2, "values": ["ABC"]},  # value longer than the cells
+        {"pattern": "A9"},  # pattern on a non-code field
+        {"type": "text", "cells": 3},  # cells only on integer and code fields
     ],
 )
 def test_bad_form_specs_are_rejected(bad):
@@ -108,3 +115,21 @@ def test_picking_a_section():
         form.section()
     with pytest.raises(ValueError, match="no section 'x'"):
         form.section("x")
+
+
+def test_mark_box_defaults_to_the_area_around_its_options():
+    spec = FormSpec.model_validate(_form(type="mark", box=None, options=["x", "y"],
+                                         option_boxes=[[10, 20, 8, 8], [40, 25, 8, 8]]))
+    assert spec.fields[0].box == (10, 20, 38, 13)
+
+
+def test_option_boxes_must_fit_the_template(tmp_path):
+    import yaml
+
+    folder = tmp_path / "f"
+    folder.mkdir()
+    spec = _form(type="mark", box=None, options=["x", "y"], option_boxes=[[10, 10, 8, 8], [195, 10, 8, 8]])
+    (folder / "form.yaml").write_text(yaml.safe_dump(spec))
+    Image.new("RGB", (200, 100), "white").save(folder / "template.png")
+    with pytest.raises(ValueError, match="outside"):
+        load_form(folder)
