@@ -83,6 +83,10 @@ GPUs, and float32 on CPU.
 Only `sectioned` exists today. A later kind, such as one photo of a whole single-layout form, would get its own
 spec shape and prompt builder.
 
+**One student per form.** A single student model learns to read every section of its form. The prompt tells it which
+section the photo shows, so the phone ships one model per form, not one per section. Training data mixes all
+sections, and eval reports accuracy per section as well as overall.
+
 ## Stage 1: synth
 
 ```bash
