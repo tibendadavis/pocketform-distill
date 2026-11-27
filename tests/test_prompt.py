@@ -5,7 +5,7 @@ from typing import get_args
 import pytest
 
 from pocketform_distill.config import FormSpec, load_form
-from pocketform_distill.prompt import BUILDERS, build_prompt, format_answer, parse_answer, prompt_info
+from pocketform_distill.prompt import BUILDERS, build_prompt, format_answer, parse_answer, prompt_info, rows
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,12 +26,49 @@ def test_prompt_lists_every_field_in_order(spec):
     assert positions == sorted(positions)
 
 
-def test_prompt_is_stable_and_ignores_boxes(spec):
+def test_prompt_is_stable_when_boxes_are_re_picked(spec):
     # Re-picking boxes must not change the prompt, or teacher outputs would have to be regenerated.
+    # Only which row a field is in matters, not its exact coordinates.
     moved = spec.model_copy(deep=True)
-    moved.sections[0].fields[0].box = (1, 1, 5, 5)
+    x, y, w, h = moved.sections[0].fields[0].box
+    moved.sections[0].fields[0].box = (x + 7, y - 4, w - 10, h + 3)
     assert build_prompt(spec) == build_prompt(spec) == build_prompt(moved)
     assert prompt_info(spec)["sha256"] == prompt_info(moved)["sha256"]
+
+
+def grid_spec() -> FormSpec:
+    """A 2x2 tally grid (labels "<row>, <column>") plus one field on its own row."""
+    def f(fid, label, x, y):
+        return {"id": fid, "label": label, "type": "integer", "digits": 3, "box": [x, y, 90, 40]}
+
+    return FormSpec.model_validate({"name": "grid", "template_image": "t.png", "sections": [
+        {"id": "s", "title": "Tally", "fields": [
+            f("a_m", "Cases A, Male", 300, 100), f("a_f", "Cases A, Female", 410, 102),
+            f("b_m", "Cases B, Male", 300, 160), f("b_f", "Cases B, Female", 410, 158),
+            f("total", "Total", 300, 220),
+        ]}]})
+
+
+def test_rows_group_side_by_side_fields():
+    assert [[f.id for f in r] for r in rows(grid_spec().fields)] == [["a_m", "a_f"], ["b_m", "b_f"], ["total"]]
+
+
+def test_rows_need_left_to_right_order():
+    spec = grid_spec()
+    a_m, a_f = spec.sections[0].fields[:2]
+    a_m.box, a_f.box = a_f.box, a_m.box  # form.yaml order is now right to left: don't claim "left to right"
+    assert [f.id for f in rows(spec.fields)[0]] == ["a_m"]
+
+
+def test_grid_prompt_lists_rows_and_warns_about_neighbouring_groups():
+    text = build_prompt(grid_spec())
+    assert "- row Cases A: a_m (Male) | a_f (Female)" in text
+    assert "- total: Total" in text
+    assert "never join digits from neighbouring groups" in text
+
+
+def test_no_group_warning_without_side_by_side_combs(spec):
+    assert "neighbouring groups" not in build_prompt(spec)  # template: each comb field on its own row
 
 
 def test_prompt_hash_changes_when_wording_inputs_change(spec):
