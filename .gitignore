@@ -26,6 +26,7 @@ mlartifacts/
 *.PNG
 *.ipynb
 !forms/*/template.png
+!forms/*/template-*.png
 
 forms/*
 !forms/_template/
