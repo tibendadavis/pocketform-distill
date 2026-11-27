@@ -116,8 +116,10 @@ How a photo is made:
    shading, rotation (±3°), perspective, blur, brightness/contrast, sensor noise and JPEG (quality 50-90). The
    comments in `configs/_template.yaml` say which phone-photo flaw each one imitates.
 
-Photo `n` (counting across sections) uses seed `synth.seed + n`, and the same config, templates and commit give
-byte-identical output on the same machine. To trace a bad image, look up its line in `manifest.jsonl` (font, pen, and
+Each photo's seed is derived from `synth.seed`, its section id and its number (a hash, recorded as `seed` in
+the manifest), and the same config, templates and commit give byte-identical output on the same machine. Adding,
+removing or reordering sections, or raising `num_photos`, never changes a photo that already exists, so its
+teacher outputs stay valid. To trace a bad image, look up its line in `manifest.jsonl` (font, pen, and
 every defect with its values). In every section exactly `round(num_photos * val_fraction)` photos are marked `val`. Rerunning the stage replaces its folder. Synth never reads
 real photos, which are the test set only.
 
@@ -231,7 +233,7 @@ one on purpose, add `!forms/<your-form>/` and `!configs/<your-run>.yaml` to `.gi
 | `student.model` | Hugging Face model id (Transformers / safetensors) |
 | `student.method` | `lora` or `full` fine-tuning |
 | `synth.num_photos` | Synthetic photos to generate per section |
-| `synth.seed` | Base seed; photo `n` (counting across sections) uses `seed + n` |
+| `synth.seed` | Base seed; each photo's seed is derived from it, the section id and the photo number |
 | `synth.empty_rate` | Chance each field is left blank (truth `null`) |
 | `synth.val_fraction` | Exact share of each section's photos marked `val` |
 | `synth.fonts_dir`, `ink_colors` | Handwriting fonts and pen colours |
