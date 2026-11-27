@@ -54,10 +54,14 @@ def main() -> None:
             for k in truth:
                 if got[k] != truth[k]:
                     print(f"  {k}: got {got[k]!r}, truth {truth[k]!r}")
+            # Shape check, independent of whether the values are right: the reply must be exactly what
+            # format_answer would write for those values, or its tokens won't line up with the target's.
+            shape_ok = answer.strip() == format_answer(spec, got)
+            missing = [f.id for f in spec.fields if f'"{f.id}":' not in answer]
+            print(f"Answer format exact: {'yes' if shape_ok else 'no'} (needed for token-level soft labels)"
+                  + (f"; keys missing from the reply: {missing}" if missing else "") + "\n")
         except ValueError as e:
-            print(f"--- vs truth ---\nCould not parse the answer: {e}")
-        exact = answer.strip() == format_answer(spec, truth)
-        print(f"Exact target format: {'yes' if exact else 'no'} (needed for token-level soft labels)\n")
+            print(f"--- vs truth ---\nCould not parse the answer: {e}\n")
 
     logprobs = resp.get("logprobs") or []
     if not logprobs:
