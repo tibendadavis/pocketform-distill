@@ -52,16 +52,18 @@ uv run python scripts/smoke_test.py path/to/form.jpg
 uv run python scripts/teacher_smoke_test.py path/to/form.jpg --teacher qwen3.5:9b
 ```
 
-**Student smoke test:** `smoke_test.py <image> [--model <hf-id>] [--device auto|cuda|mps|cpu] [--max-new-tokens 512]`
-runs the extraction prompt on one image with greedy decoding. It prints the device, load time, memory use, the output
+**Student smoke test:** `smoke_test.py <image> [--form forms/<form>] [--model <hf-id>] [--device auto|cuda|mps|cpu]
+[--max-new-tokens 512]` runs the form's prompt (from `prompt.py`) on one image with greedy decoding. It prints the device, load time, memory use, the output
 with tokens/s, and the top-5 probabilities for the first 5 output tokens. An untrained student gives poor output, so the
 test passes if it runs and prints probabilities. The dtype is bfloat16 on GPUs that support it, float16 on older NVIDIA
 GPUs, and float32 on CPU.
 
-**Teacher smoke test:** `teacher_smoke_test.py <image> --teacher <tag> [--student <hf-id>] [--top 20]` calls Ollama
-with logprobs on and prints:
+**Teacher smoke test:** `teacher_smoke_test.py <image> --teacher <tag> [--form forms/<form>] [--student <hf-id>]
+[--top 20] [--show-prompt]` sends the form's prompt to Ollama with logprobs on and prints:
 
 - the teacher's output and tokens/s
+- for a synthetic image (truth `{id}.json` next to it): fields correct, and whether the reply is exactly the target
+  format. It must be, or the teacher's tokens won't line up with what the student learns.
 - the top alternatives for the first 5 tokens
 - a **tokenizer check**: the share of teacher tokens that map to exactly one student token id. Ollama returns tokens
   as text and bytes rather than ids, and distillation compares the two models token by token, so the tokens must map
@@ -115,6 +117,27 @@ where `form.yaml` currently puts it. For each field, click the top-left then the
 area. For a comb field, take all digit cells as one box. Enter keeps the orange box, u undoes, s skips, q finishes.
 `--write` saves the boxes into `form.yaml` (previous version in `form.yaml.bak`); without it they are only printed.
 
+## The prompt
+
+```bash
+uv run pocketform-distill prompt --config configs/_template.yaml
+```
+
+`src/pocketform_distill/prompt.py` is the only place a prompt is written. Every stage that talks to a model calls
+`build_prompt(form spec)`, and later the exported bundle will ship that exact text to the phone. Distillation needs this:
+the teacher's probabilities are "what comes next, given this prompt and image", and the student learns to match them
+under the same prompt.
+
+- **One builder per form `kind`.** `sectioned` lists each section's fields (id + label, with a type hint), then the
+  answer rules and a one-line example. Each form gets the same wording with its own fields. A new kind means a new
+  `kind` value plus a builder in `prompt.BUILDERS`; a test fails if one is missing.
+- **The answer format lives next to it.** `format_answer` gives the exact target text: one line of JSON, keys in
+  `form.yaml` order, `null` for empty. `parse_answer` reads a reply back. Without the example line, `qwen3.5:9b`
+  answered in fenced, pretty-printed JSON that doesn't match the target token for token.
+- **Checked by hash.** Each stage will record `prompt_info` (kind + sha256) in its `run.json`, so outputs made with
+  different prompts can't be mixed by mistake. Labels and field order are part of the prompt; boxes are not, so
+  re-picking boxes doesn't invalidate teacher outputs.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) and Python 3.12
@@ -140,6 +163,7 @@ scripts/smoke_test.py           student smoke test
 scripts/teacher_smoke_test.py   teacher smoke test
 src/pocketform_distill/         the package (CLI: `pocketform-distill`)
   config.py                     typed run config + form spec (pydantic)
+  prompt.py                     the prompt per form kind + the answer format (used by every stage)
   synth.py, values.py,          stage 1: values, handwriting, phone-photo defects
   render.py, augment.py
 tests/                          offline unit tests (no model downloads)
@@ -205,7 +229,6 @@ would be included.
 - [x] Stage 1: synth
 - [ ] Pipeline stages: teacher, dataset, train, eval, export
 - [ ] Resolution sweep on `image.max_pixels`
-- [ ] Shorter output format (field ids instead of labels)
 - [ ] int8 / int4 quantization
 - [ ] On-device test with LiteRT
 
